@@ -20,13 +20,27 @@ class FundsDownloader(QThread):
     send_to_display_info = pyqtSignal(str)
     send_to_display_info2 = pyqtSignal(tuple)
 
-    def __init__(self, fid, parent=None):
+    def __init__(self, fid=None, favored=False, parent=None):
         super(FundsDownloader, self).__init__(parent)
         self.fid = fid
+        self.favored = favored
 
     def run(self):
         self.result_broadcast.emit(self.fromFundID(self.fid))
         self.emitInfo('处理完毕')
+
+    def _get_favorite(self):
+        try:
+            with open('favorite.json', 'r') as f:
+                all_fvr_from_file = json.loads(f.read())
+        except FileExistsError:
+            with open('favorite.json', 'w') as f:
+                return
+        self.emitInfo('开始加载收藏基金数据')
+        ret = self.fromFundID(all_fvr_from_file)
+        for each in ret:
+            each.append('已收藏')
+        return ret
 
     def fromFundID(self, ids):
         ret = []
@@ -39,6 +53,8 @@ class FundsDownloader(QThread):
                     break
                 except (ConnectionError, TimeoutError):
                     print('Bad connection, try again.')
+            if req.ok is False:
+                return []
             soup = bsoup(req.content, 'lxml')
             _inc = [x.text[:-1] for x in soup.find('li', {'id': 'increaseAmount_stage'}).findAll('tr')[1].findAll('td')]
             tp = [fvr, soup.find('div', {'class': 'fundDetail-tit'}).text.split('(')[0], '', '']
@@ -56,8 +72,7 @@ class FundsDownloader(QThread):
             ret.append(tp)
             n_ids += 1
             self.send_to_display_info2.emit((n_ids, len(ids)))
-        ret = self._get_addition_info(ret)
-        return ret
+        return self._get_addition_info(ret)
 
     def _get_addition_info(self, funds):
         n_finished = 0
@@ -69,6 +84,8 @@ class FundsDownloader(QThread):
             each[3] = add['manager']
             each.insert(6, 'null')
             each.append(add['scale'])
+            if self.favored:
+                each.append('已收藏')
             n_finished += 1
             self.send_to_display_info2.emit((n_finished, len(funds)))
         return funds
@@ -115,21 +132,20 @@ class FundsDownloader(QThread):
 
 
 class FundSelctor(FundsDownloader):
-    def __init__(self, kw, rank, parent=None):
-        super(FundSelctor, self).__init__(fid=None, parent=parent)
+    def __init__(self, kw, rank, favor, parent=None):
+        super(FundSelctor, self).__init__(parent=parent)
         self.history_kw = kw
         self.rank = rank
         self.all_funds = None
         self.num_funds = 0
-        self.favor_funds = None
+        self.favor_funds = favor
         self.selected_funds = []
 
     def run(self):
-        self.favor_funds = self._get_favorite()
         self._dl_data()
         self._get_list()
         self.selected_funds = self._get_addition_info(self.selected_funds)
-        self.result_broadcast.emit(self.selected_funds + self.favor_funds)
+        self.result_broadcast.emit(self.selected_funds)
         self.emitInfo('处理完毕')
 
     def _dl_data(self):
@@ -178,10 +194,9 @@ class FundSelctor(FundsDownloader):
                 compr = self._trunc_data(self._rank_fund(each))
             else:
                 compr = self._compare_data(compr, self._trunc_data(self._rank_fund(each)))
-        favor_ids = [id[0] for id in self.favor_funds]
         # 排查已经在favor 列表里面的
         for each in compr:
-            if each[0] in favor_ids:
+            if each[0] in self.favor_funds:
                 continue
             self.selected_funds.append(each)
 
@@ -205,50 +220,35 @@ class FundSelctor(FundsDownloader):
         """
         return [ea for ea in datal if ea in datar]
 
-    def _get_favorite(self):
-        try:
-            with open('favorite.json', 'r') as f:
-                all_fvr_from_file = json.loads(f.read())
-        except FileExistsError:
-            with open('favorite.json', 'w') as f:
-                return
-        self.emitInfo('开始加载收藏基金数据')
-        ret = self.fromFundID(all_fvr_from_file)
-        for each in ret:
-            each.append('已收藏')
-        return ret
-
 
 class FundRefresher(QThread):
     result_feedback = pyqtSignal(tuple)
 
-    def __init__(self, funds, parent=None):
+    def __init__(self, parent=None):
         super(FundRefresher, self).__init__(parent)
-        self.funds = funds
+        self.funds = []
 
     def run(self):
         while True:
+            self.result_feedback.emit(('Show Me New',))
+            time.sleep(0.5)
             for each in self.funds:
                 while True:
                     try:
-                        req = requests.get('http://fund.eastmoney.com/{}.html'.format(each[0]))
+                        url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
+                        req_text = requests.get(url, timeout=5).text
                         break
                     except (ConnectionError, TimeoutError):
                         print('Bad connection, try again.')
-                bobj = bsoup(req.content, 'lxml')
-                r_val = float(bobj.find('dl', {'class':'floatleft fundZdf'}).span.find_next_sibling().text[1:-1])
-                date = bobj.find('dl', {'class': 'dataItem02'}).dt.p.text.split(' ')[1]
-                val = float(bobj.find('dl', {'class': 'dataItem02'}).dd.span.find_next_sibling().text.replace('%', ''))
-                self.result_feedback.emit((each[1], r_val, date, val))
+                json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
+                self.result_feedback.emit((each, json_d['gszzl'], json_d['dwjz'], json_d['jzrq']))
+            time.sleep(2.5)
             if isTradingTime() is False:
                 self.result_feedback.emit((None,))
                 break
 
     def setFunds(self, funds):
         self.funds = funds
-
-    def commandReceived(self, turn):
-        self.running = turn
 
 
 class StockRefresher(QThread):
@@ -257,7 +257,7 @@ class StockRefresher(QThread):
     def __init__(self, parent=None):
         super(StockRefresher, self).__init__(parent)
         self.stockUrl = \
-            'http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401'
+            'http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401'
 
     def run(self):
         self.refreshing()
@@ -265,7 +265,6 @@ class StockRefresher(QThread):
     def refreshing(self):
         while True:
             ret = ''
-            rst = []
             while True:
                 try:
                     rst = requests.get(self.stockUrl, timeout=5).text.split(';\n')
@@ -289,12 +288,13 @@ class StockRefresher(QThread):
             val[3] = val[3].replace('-', '↓')
         else:
             val[3] = '↑' + val[3]
-        return '{}: <font color="{}">{}{}{}% ({})</font>{}'\
-            .format(name[code], color, round(float(val[1]), 2), '&nbsp;'*2, val[3], round(float(val[2]), 2), '&nbsp;'*4)
+        return '{}: <font color="{}">{}{}{}%</font>{}'\
+            .format(name[code], color, round(float(val[1]), 2), '&nbsp;'*4, val[3], '&nbsp;'*8)
+
 
 def isTradingTime():
     if datetime.now().isoweekday() is 6 or datetime.now().isoweekday() is 7:
         return False
-    if datetime.now().hour > 15 or datetime.now().hour < 9:
+    if datetime.now().hour >= 15 or datetime.now().hour < 9:
         return False
     return True
