@@ -11,7 +11,7 @@ class GF_MainWindow(QWidget):
     def __init__(self, parent=None):
         super(GF_MainWindow, self).__init__(parent)
         self.setWindowTitle('好基基 by Fyoung')
-        self.setFixedSize(1300, 650)
+        self.setFixedWidth(1280)
         self.fundRefresher = gf_core.FundRefresher()
         self.fundRefresher.result_feedback.connect(self.reckonFeadback)
         self.stockRefresher = gf_core.StockRefresher()
@@ -66,10 +66,7 @@ class GF_MainWindow(QWidget):
         midlayout.addWidget(self.search_btn)
 
         self.display_table = QTableWidget()
-        self.display_table.setColumnCount(17)
-        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '累计', '估算(%)',
-                                                      '日涨', '周涨', '月涨', '季涨', '半年', '一年',
-                                                      '两年', '三年', '规模', '收藏', ''])
+
         self.display_table.itemClicked.connect(self.displaySelectedFund)
         self.display_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.display_table.setSortingEnabled(True)
@@ -119,17 +116,6 @@ class GF_MainWindow(QWidget):
         if '开始更新' in self.syn_btn.text() and self.fundRefresher.isRunning() is False:
             self.fundRefresher.start()
 
-    # def addNewItem(self, sth):
-    #     if len(sth) == 0:
-    #         QMessageBox().warning(self, '基金不存在', '你所查找的基金不存在', QMessageBox.Ok)
-    #         return
-    #     r = self.display_table.rowCount()
-    #     self.display_table.setRowCount(r + len(sth))
-    #     for each in range(len(sth)):
-    #         self.placeItem(sth[each], r + each)
-    #     self.resizeTable()
-    #     self.syn_btn.click()
-
     def fundReceived(self, funds):
         for each in funds:
             self.the_funds_should_in_the_table[each[0]] = each
@@ -140,13 +126,20 @@ class GF_MainWindow(QWidget):
         self.syn_btn.click()
 
     def applyNewTable(self, order=None):
+        self.display_table.clear()
+        self.display_table.setColumnCount(17)
+        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '累计', '估算(%)',
+                                                      '日涨', '周涨', '月涨', '季涨', '半年', '一年',
+                                                      '两年', '三年', '规模', '收藏', ''])
+        self.display_table.setSortingEnabled(False)
         self.display_table.setRowCount(len(self.the_funds_should_in_the_table))
         if order is None:
             for r, each in enumerate(self.the_funds_should_in_the_table.keys()):
                 self.placeItem(self.the_funds_should_in_the_table[each], r)
         else:
-            for r, each in order:
+            for r, each in enumerate(order):
                 self.placeItem(self.the_funds_should_in_the_table[each], r)
+        self.display_table.setSortingEnabled(True)
 
     def placeItem(self, each, r):
         name = QTableWidgetItem('{}  [{}]'.format(each[1], each[0]))
@@ -185,8 +178,13 @@ class GF_MainWindow(QWidget):
             if _n < 6:
                 _sign = ''
             try:
-                _inc.setText('{}{}'.format(round(float(each[_n]), 2), _sign))
-                _inc.setForeground(self.setValueColor(each[_n]))
+                _val = each[_n]
+                if '*' in _val:
+                    _val = _val.replace('*', '')
+                    _inc.setText('{}{} [new]'.format(round(float(_val), 2), _sign))
+                else:
+                    _inc.setText('{}{}'.format(round(float(_val), 2), _sign))
+                _inc.setForeground(self.setValueColor(_val))
             except (ValueError, TypeError):
                 pass
             _inc.setTextAlignment(Qt.AlignCenter)
@@ -211,23 +209,22 @@ class GF_MainWindow(QWidget):
         self.display_table.setItem(r, 16, QTableWidgetItem('删'))
 
     def reckonFeadback(self, rec):
-        if rec:
-            self.info_display.setText('[{}] 休市中...'.format(datetime.now().strftime('%H:%M:%S')))
-            self.syn_btn.setText('开始更新')
-            return
-        elif 'Data' in rec.keys():
+        self.infoReceived('[{}] 已更新'.format(datetime.now().strftime('%H:%M:%S')))
+        self.syn_btn.setText('更新中...')
+        if 'Data' in rec.keys():
             self.fundRefresher.setFunds(tuple(self.the_funds_should_in_the_table.keys()))
             return
-        self.syn_btn.setText('更新中...')
         for each in rec:
-            try:
-                self.the_funds_should_in_the_table[each][6] = rec[each][0]
-                if '---' not in rec[each][1]:
-                    self.the_funds_should_in_the_table[each][4] = rec[each][1]
-                    self.the_funds_should_in_the_table[each][7] = 'new {}'.format(rec[each][2])
-            except KeyError:
-                print('{} removed?'.format(each))
-                return
+            if isinstance(rec[each], str):
+                try:
+                    self.the_funds_should_in_the_table[each][6] = rec[each]
+                except KeyError:
+                    print('{} removed?'.format(each))
+                    return
+            elif isinstance(rec[each], tuple):
+                self.the_funds_should_in_the_table[each][4] = rec[each][0]
+                self.the_funds_should_in_the_table[each][7] = '{}*'.format(rec[each][1])
+
         rows_order = self.wrapContent()
         self.applyNewTable(rows_order)
 

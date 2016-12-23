@@ -226,42 +226,56 @@ class FundRefresher(QThread):
 
     def __init__(self, parent=None):
         super(FundRefresher, self).__init__(parent)
-        self.funds = ()
+        self.feadbackFunds = ()
+        self.allFunds = {}
+
+    def freshVal(self, fids):
+        fbDict = {}
+        for each in fids:
+            while True:
+                try:
+                    url = 'http://fund.eastmoney.com/{}.html'.format(each)
+                    req_text = requests.get(url, timeout=5).content.decode('gb2312', 'ignore')
+                    break
+                except:
+                    print('Bad connection, try again.')
+            # 匹配出净值数据, 返回的tuple中0为净值日期, 1为当前净值
+            dt = re.search(r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?(\d+\.\d+)%',
+                        req_text).groups()
+            # 比较当前日期是否和净值日期一样, 如果一样说明已经是最新的, 然后开始打包.
+            if datetime.now().strftime('%d') == dt[0][-2:]:
+                fbDict[each] = (dt[1], dt[2])
+        return fbDict
+
+    def reckonVal(self, fids):
+        fbDict = {}
+        for each in fids:
+            while True:
+                try:
+                    url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
+                    req_text = requests.get(url, timeout=5).text
+                    break
+                except:
+                    print('Bad connection, try again.')
+            try:
+                json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
+            except:
+                continue
+            fbDict[each] = json_d['gszzl']
+        return fbDict
 
     def run(self):
-        gzDict = {}
         while True:
             self.result_feedback.emit({'Data': ''})
-            time.sleep(0.5)
-            if self.funds:
-                try:
-                    req = requests.get('http://fund.eastmoney.com/fundguzhi1.html', timeout=6)
-                except (ConnectionError, TimeoutError):
-                    continue
-                gz = bsoup(req.content, 'html.parser').find('table', {'class': 'dbtable'}).tbody.findAll('tr')
-                for each in gz:
-                    _l = [x.text for x in each.findAll('td')]
-                    if _l[2] in self.funds:
-                        gzDict[_l[2]] = [_l[5].replace('%', ''), _l[6], _l[7].replace('%', '')]
-                self.result_feedback.emit(gzDict)
-
-            # for each in self.funds:
-            #     while True:
-            #         try:
-            #             url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
-            #             req_text = requests.get(url, timeout=5).text
-            #             break
-            #         except (ConnectionError, TimeoutError):
-            #             print('Bad connection, try again.')
-            #     json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
-            #     self.result_feedback.emit((each, json_d['gszzl'], json_d['dwjz'], json_d['jzrq']))
-            # time.sleep(2.5)
-            if isTradingTime() is False:
-                self.result_feedback.emit({})
-                break
+            if isTradingTime():
+                emitPak = self.reckonVal(self.feadbackFunds)
+            else:
+                emitPak = self.freshVal(self.feadbackFunds)
+            self.result_feedback.emit(emitPak)
+            time.sleep(2)
 
     def setFunds(self, funds):
-        self.funds = funds
+        self.feadbackFunds = funds
 
 
 class StockRefresher(QThread):
@@ -283,7 +297,7 @@ class StockRefresher(QThread):
                     rst = requests.get(self.stockUrl, timeout=5).text.split(';\n')
                     rst = [x[x.find('"')+1:x.rfind('"')].split(',') for x in rst]
                     break
-                except (ConnectionError, TimeoutError):
+                except:
                     print('Bad connection, try again.')
             for index, each in enumerate(['sh000001', 'sz399001', 'sz399006', 'sz399905', 'sz399300', 'sz399401']):
                 ret += self.drawColor(rst[index], each)
