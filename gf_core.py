@@ -29,18 +29,18 @@ class FundsDownloader(QThread):
         self.result_broadcast.emit(self.fromFundID(self.fid))
         self.emitInfo('处理完毕')
 
-    def _get_favorite(self):
-        try:
-            with open('favorite.json', 'r') as f:
-                all_fvr_from_file = json.loads(f.read())
-        except FileExistsError:
-            with open('favorite.json', 'w') as f:
-                return
-        self.emitInfo('开始加载收藏基金数据')
-        ret = self.fromFundID(all_fvr_from_file)
-        for each in ret:
-            each.append('已收藏')
-        return ret
+    # def _get_favorite(self):
+    #     try:
+    #         with open('favorite.json', 'r') as f:
+    #             all_fvr_from_file = json.loads(f.read())
+    #     except FileExistsError:
+    #         with open('favorite.json', 'w') as f:
+    #             return
+    #     self.emitInfo('开始加载收藏基金数据')
+    #     ret = self.fromFundID(all_fvr_from_file)
+    #     for each in ret:
+    #         each.append('已收藏')
+    #     return ret
 
     def fromFundID(self, ids):
         ret = []
@@ -71,6 +71,7 @@ class FundsDownloader(QThread):
                     tp.append('')
             ret.append(tp)
             n_ids += 1
+            self.emitInfo('初始化 {}'.format(tp[1]))
             self.send_to_display_info2.emit((n_ids, len(ids)))
         return self._get_addition_info(ret)
 
@@ -94,7 +95,6 @@ class FundsDownloader(QThread):
         """
             下载基金详细情况
         """
-        cooked_info = None
         while True:
             try:
                 cooked_info = self._beautiful_pages(requests.get("http://fund.eastmoney.com/pingzhongdata/{}.js"
@@ -223,11 +223,13 @@ class FundSelctor(FundsDownloader):
 
 class FundRefresher(QThread):
     result_feedback = pyqtSignal(dict)
+    infot_text_broadcast = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super(FundRefresher, self).__init__(parent)
         self.feadbackFunds = ()
         self.allFunds = {}
+        self.state = 1
 
     def freshVal(self, fids):
         fbDict = {}
@@ -240,7 +242,7 @@ class FundRefresher(QThread):
                 except:
                     print('Bad connection, try again.')
             # 匹配出净值数据, 返回的tuple中0为净值日期, 1为当前净值
-            dt = re.search(r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?(\d+\.\d+)%',
+            dt = re.search(r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%',
                         req_text).groups()
             # 比较当前日期是否和净值日期一样, 如果一样说明已经是最新的, 然后开始打包.
             if datetime.now().strftime('%d') == dt[0][-2:]:
@@ -266,16 +268,36 @@ class FundRefresher(QThread):
 
     def run(self):
         while True:
-            self.result_feedback.emit({'Data': ''})
-            if isTradingTime():
+            if self.state == 1:
+                self.infot_text_broadcast.emit('[{}] 正在自动更新...'.format(datetime.now().strftime('%H:%M:%S')))
+                self.result_feedback.emit({'Data': ''})
+                if isTradingTime():
+                    emitPak = self.reckonVal(self.feadbackFunds)
+                else:
+                    emitPak = self.freshVal(self.feadbackFunds)
+                self.result_feedback.emit(emitPak)
+                time.sleep(3)
+            elif self.state == 2:
+                self.infot_text_broadcast.emit('[{}] 正在手动更新...'.format(datetime.now().strftime('%H:%M:%S')))
+                self.result_feedback.emit({'Data': ''})
+                time.sleep(0.3)
                 emitPak = self.reckonVal(self.feadbackFunds)
-            else:
+                self.result_feedback.emit(emitPak)
                 emitPak = self.freshVal(self.feadbackFunds)
-            self.result_feedback.emit(emitPak)
-            time.sleep(2)
+                self.result_feedback.emit(emitPak)
+                self.state = 1
+            elif self.state == 0:
+                self.infot_text_broadcast.emit('[{}] 更新暂停'.format(datetime.now().strftime('%H:%M:%S')))
+                time.sleep(1)
 
     def setFunds(self, funds):
         self.feadbackFunds = funds
+
+    def changeState(self, num):
+        self.state = num
+
+    def currentState(self):
+        return self.state
 
 
 class StockRefresher(QThread):
