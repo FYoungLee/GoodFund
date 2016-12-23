@@ -16,9 +16,7 @@ class GF_MainWindow(QWidget):
         self.fundRefresher.result_feedback.connect(self.reckonFeadback)
         self.stockRefresher = gf_core.StockRefresher()
         self.stockRefresher.stock_val_brodcast.connect(self.stockReceived)
-        self.favorite_ids = self.loadFavor()
-        self.myfavor_funds = {}
-        self.other_funds = {}
+        self.the_funds_should_in_the_table = {}
         mlayout = QVBoxLayout()
 
         optionlayout = QHBoxLayout()
@@ -38,7 +36,7 @@ class GF_MainWindow(QWidget):
         self.rank_slider = QSlider(Qt.Horizontal)
         self.rank_slider.setRange(10, 80)
         self.rank_slider.setValue(25)
-        self.rank_slider.valueChanged.connect(self.rankSilderChanged)
+        self.rank_slider.valueChanged.connect(lambda x: self.rank_label.setText(str(x)))
         optionlayout.addWidget(self.rank_slider)
         self.rank_label = QLabel()
         self.rank_label.setFixedWidth(30)
@@ -101,8 +99,8 @@ class GF_MainWindow(QWidget):
                 return
         return all_fvr_from_file
 
-    def rankSilderChanged(self, val):
-        self.rank_label.setText(str(val))
+    # def rankSilderChanged(self, val):
+    #     self.rank_label.setText(str(val))
 
     def displaySelectedFund(self, fund_item):
         pass
@@ -110,7 +108,8 @@ class GF_MainWindow(QWidget):
     def startClicked(self):
         self.start_btn.setEnabled(False)
         self.start_btn.setText('筛选中...')
-        fs = gf_core.FundSelctor(self.history_combox.currentText(), self.rank_slider.value(), self.favorite_ids, self)
+        fs = gf_core.FundSelctor(self.history_combox.currentText(), self.rank_slider.value(),
+                                 self.the_funds_should_in_the_table.keys(), self)
         fs.result_broadcast.connect(self.fundReceived)
         fs.send_to_display_info.connect(self.infoReceived)
         fs.send_to_display_info2.connect(self.infoReceived2)
@@ -131,17 +130,23 @@ class GF_MainWindow(QWidget):
     #     self.resizeTable()
     #     self.syn_btn.click()
 
-    def fundReceived(self, funds, combine=True):
-        new_funds = funds
-        if combine:
-            new_funds = self.combineContent(funds, self.wrapContent())
-        self.display_table.setRowCount(len(new_funds))
-        for r, each in enumerate(new_funds):
-            self.placeItem(each, r)
+    def fundReceived(self, funds):
+        for each in funds:
+            self.the_funds_should_in_the_table[each[0]] = each
+        self.applyNewTable()
         self.resizeTable()
         self.start_btn.setEnabled(True)
         self.start_btn.setText('开始筛选')
         self.syn_btn.click()
+
+    def applyNewTable(self, order=None):
+        self.display_table.setRowCount(len(self.the_funds_should_in_the_table))
+        if order is None:
+            for r, each in enumerate(self.the_funds_should_in_the_table.keys()):
+                self.placeItem(self.the_funds_should_in_the_table[each], r)
+        else:
+            for r, each in order:
+                self.placeItem(self.the_funds_should_in_the_table[each], r)
 
     def placeItem(self, each, r):
         name = QTableWidgetItem('{}  [{}]'.format(each[1], each[0]))
@@ -205,51 +210,26 @@ class GF_MainWindow(QWidget):
         self.display_table.setItem(r, 15, favored)
         self.display_table.setItem(r, 16, QTableWidgetItem('删'))
 
-    def resizeTable(self):
-        for n in range(1, 17):
-            self.display_table.horizontalHeader().setSectionResizeMode(n, QHeaderView.ResizeToContents)
-
-    def setValueColor(self, val):
-        try:
-            if float(val) > 0:
-                return Qt.red
-            elif float(val) < 0:
-                return Qt.darkGreen
-        except ValueError:
-            return Qt.black
-
-    def infoReceived(self, info):
-        self.info_display.setText(info)
-
-    def infoReceived2(self, info):
-        self.info_display2.setText('{}/{}'.format(info[0], info[1]))
-
     def reckonFeadback(self, rec):
-        if rec[0] is None:
+        if rec:
             self.info_display.setText('[{}] 休市中...'.format(datetime.now().strftime('%H:%M:%S')))
             self.syn_btn.setText('开始更新')
             return
-        elif rec[0] == 'Show Me New':
-            self.fundRefresher.setFunds([self.display_table.item(r, 0).toolTip() for r in range(self.display_table.rowCount())])
-            return
-        try:
-            r = self.display_table.findItems(rec[0], Qt.MatchContains)[0].row()
-        except IndexError:
-            print('{} removed?'.format(rec[0]))
+        elif 'Data' in rec.keys():
+            self.fundRefresher.setFunds(tuple(self.the_funds_should_in_the_table.keys()))
             return
         self.syn_btn.setText('更新中...')
-        self.display_table.item(r, 5).setText('{}%'.format(rec[1]))
-        try:
-            self.display_table.item(r, 5).setForeground(self.setValueColor(rec[1]))
-        except TypeError:
-            pass
-        nowtime = datetime.now().strftime('%d')
-        if nowtime == rec[3][-2:]:
-            now_val = float(rec[2])
-            table_val = float(self.display_table.item(r, 3).text())
-            _inc = round((now_val - table_val) / table_val, 2)
-            self.display_table.item(r, 6).setText('{}% | {}'.format(_inc, rec[3][5:]))
-            self.display_table.item(r, 6).setForeground(self.setValueColor(_inc))
+        for each in rec:
+            try:
+                self.the_funds_should_in_the_table[each][6] = rec[each][0]
+                if '---' not in rec[each][1]:
+                    self.the_funds_should_in_the_table[each][4] = rec[each][1]
+                    self.the_funds_should_in_the_table[each][7] = 'new {}'.format(rec[each][2])
+            except KeyError:
+                print('{} removed?'.format(each))
+                return
+        rows_order = self.wrapContent()
+        self.applyNewTable(rows_order)
 
     def tableItemClicked(self, _item):
         if _item.column() == 0:
@@ -282,50 +262,34 @@ class GF_MainWindow(QWidget):
             reply = QMessageBox().question(self, '删除基金',
                                           '你确定要移除"{}"吗?'.format(self.display_table.item(_item.row(), 0).text()),
                                           QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
-            t_data = self.wrapContent()
-            del_id = self.display_table.item(_item.row(), 0).toolTip()
-            ret = tuple(filter(lambda x: del_id not in x[0], t_data))
-            # remain_id = [i[0] for i in ret]
-            self.fundReceived(ret, combine=False)
-
-    def stockReceived(self, stext):
-        self.stockDisplay.setText(stext)
+            if reply == QMessageBox.Yes:
+                order = self.wrapContent()
+                del_id = self.display_table.item(_item.row(), 0).toolTip()
+                self.the_funds_should_in_the_table.pop(del_id)
+                order.pop(order.index(del_id))
+                self.applyNewTable(order)
 
     def wrapContent(self):
         # 将当前table里面的所有数据打包
-        wraped = []
-        for r in range(self.display_table.rowCount()):
-            t_list = [self.display_table.item(r, 0).toolTip(), self.display_table.item(r, 0).data(1000),
-                      self.display_table.item(r, 1).data(Qt.DisplayRole), self.display_table.item(r, 2).data(1000)]
-            for _c in range(3, 14):
-                _text = self.display_table.item(r, _c).text()
-                _l = _text.find('%')
-                if _l >= 0:
-                    _text = _text[:_l]
-                t_list.append(_text)
-            t_list.append(self.display_table.item(r, 14).text().replace('亿', ''))
-            if self.display_table.item(r, 15).text() == '已收藏':
-                t_list.append('已收藏')
-            wraped.append(t_list)
-        return wraped
+        rows_order = []
+        for row in range(self.display_table.rowCount()):
+            rows_order.append(self.display_table.item(row, 0).toolTip())
+        return rows_order
 
-    def combineContent(self, pak1, pak2):
-        # 比较两个list中的数据是否重复, 返回一个并集
-        # y[0] 提出 pak2 中的基金id数据, 包装成一个新的id list, x从中对比.
-        ret = pak2
-        ret.extend([x for x in pak1 if x[0] not in [y[0] for y in pak2]])
-        return ret
+    # def combineContent(self, pak1, pak2):
+    #     # 比较两个list中的数据是否重复, 返回一个并集
+    #     # y[0] 提出 pak2 中的基金id数据, 包装成一个新的id list, x从中对比.
+    #     ret = pak2
+    #     ret.extend([x for x in pak1 if x[0] not in [y[0] for y in pak2]])
+    #     return ret
 
     def searchFund(self):
         if re.match(r'\d{6}', self.search_line.text()) is None:
             self.info_display.setText('[{}] 基金代码不正确, 请重新输入.'.format(datetime.now().strftime('%H%M%S')))
             return
-        for row in range(self.display_table.rowCount()):
-            if self.search_line.text() in self.display_table.item(row, 0).toolTip():
-                self.info_display.setText('[{}] 基金已经在列表中'.format(datetime.now().strftime('%H%M%S')))
-                return
+        if self.search_line.text() in self.the_funds_should_in_the_table.keys():
+            self.info_display.setText('[{}] 基金已经在列表中'.format(datetime.now().strftime('%H%M%S')))
+            return
         self.startThreadSearch([self.search_line.text()])
 
     def startThreadSearch(self, id_list, favored=False):
@@ -334,14 +298,35 @@ class GF_MainWindow(QWidget):
         th.result_broadcast.connect(self.fundReceived)
         th.start()
 
+    def setValueColor(self, val):
+        try:
+            if float(val) > 0:
+                return Qt.red
+            elif float(val) < 0:
+                return Qt.darkGreen
+        except ValueError:
+            return Qt.black
+
+    def resizeTable(self):
+        for n in range(1, 17):
+            self.display_table.horizontalHeader().setSectionResizeMode(n, QHeaderView.ResizeToContents)
+
+    def infoReceived(self, info):
+        self.info_display.setText(info)
+
+    def infoReceived2(self, info):
+        self.info_display2.setText('{}/{}'.format(info[0], info[1]))
+
+    def stockReceived(self, stext):
+        self.stockDisplay.setText(stext)
 
 
 class mygfItem(QTableWidgetItem):
     def __lt__(self, other):
         if isinstance(other, QTableWidgetItem):
             try:
-                my_value = float(re.search(r'([+|-]?\d+.\d+|0)', self.text()).group(1))
-                other_value = float(re.search(r'([+|-]?\d+.\d+|0)', other.text()).group(1))
+                my_value = float(re.search(r'([+|-]?\d+\.\d+|0)', self.text()).group(1))
+                other_value = float(re.search(r'([+|-]?\d+\.\d+|0)', other.text()).group(1))
                 return my_value < other_value
             except (AttributeError, TypeError):
                 return super(mygfItem, self).__lt__(other)

@@ -1,8 +1,8 @@
 """
     从天天基金网，根据基金的排名情况，选出业绩长期优良的基金，然后下载其数据，最后制作成html文件以供查阅。
     作者： Fyoung Lix
-    日期： 2016年11月2日
-    版本： v1.0
+    日期： 2016年12月22日
+    版本： v1.1
 """
 # -*- coding: utf-8 -*-
 import requests
@@ -132,13 +132,13 @@ class FundsDownloader(QThread):
 
 
 class FundSelctor(FundsDownloader):
-    def __init__(self, kw, rank, favor, parent=None):
+    def __init__(self, kw, rank, fl_ist, parent=None):
         super(FundSelctor, self).__init__(parent=parent)
         self.history_kw = kw
         self.rank = rank
         self.all_funds = None
         self.num_funds = 0
-        self.favor_funds = favor
+        self.filter_list = fl_ist
         self.selected_funds = []
 
     def run(self):
@@ -194,9 +194,9 @@ class FundSelctor(FundsDownloader):
                 compr = self._trunc_data(self._rank_fund(each))
             else:
                 compr = self._compare_data(compr, self._trunc_data(self._rank_fund(each)))
-        # 排查已经在favor 列表里面的
+        # 排查已经在filter list 列表里面的
         for each in compr:
-            if each[0] in self.favor_funds:
+            if each[0] in self.filter_list:
                 continue
             self.selected_funds.append(each)
 
@@ -222,29 +222,42 @@ class FundSelctor(FundsDownloader):
 
 
 class FundRefresher(QThread):
-    result_feedback = pyqtSignal(tuple)
+    result_feedback = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super(FundRefresher, self).__init__(parent)
-        self.funds = []
+        self.funds = ()
 
     def run(self):
+        gzDict = {}
         while True:
-            self.result_feedback.emit(('Show Me New',))
+            self.result_feedback.emit({'Data': ''})
             time.sleep(0.5)
-            for each in self.funds:
-                while True:
-                    try:
-                        url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
-                        req_text = requests.get(url, timeout=5).text
-                        break
-                    except (ConnectionError, TimeoutError):
-                        print('Bad connection, try again.')
-                json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
-                self.result_feedback.emit((each, json_d['gszzl'], json_d['dwjz'], json_d['jzrq']))
-            time.sleep(2.5)
+            if self.funds:
+                try:
+                    req = requests.get('http://fund.eastmoney.com/fundguzhi1.html', timeout=6)
+                except (ConnectionError, TimeoutError):
+                    continue
+                gz = bsoup(req.content, 'html.parser').find('table', {'class': 'dbtable'}).tbody.findAll('tr')
+                for each in gz:
+                    _l = [x.text for x in each.findAll('td')]
+                    if _l[2] in self.funds:
+                        gzDict[_l[2]] = [_l[5].replace('%', ''), _l[6], _l[7].replace('%', '')]
+                self.result_feedback.emit(gzDict)
+
+            # for each in self.funds:
+            #     while True:
+            #         try:
+            #             url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
+            #             req_text = requests.get(url, timeout=5).text
+            #             break
+            #         except (ConnectionError, TimeoutError):
+            #             print('Bad connection, try again.')
+            #     json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
+            #     self.result_feedback.emit((each, json_d['gszzl'], json_d['dwjz'], json_d['jzrq']))
+            # time.sleep(2.5)
             if isTradingTime() is False:
-                self.result_feedback.emit((None,))
+                self.result_feedback.emit({})
                 break
 
     def setFunds(self, funds):
