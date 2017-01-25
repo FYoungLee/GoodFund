@@ -9,10 +9,27 @@ import requests
 import json
 import re
 import time
+import random
 from json import decoder
 from datetime import datetime
 from bs4 import BeautifulSoup as bsoup
 from PyQt5.QtCore import QThread, pyqtSignal
+
+
+def get_headers():
+    UserAgents = [
+        'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9a2pre) Gecko/20061231 Minefield/3.0a2pre',
+        'Mozilla/5.0 (X11; U; Linux x86_64; de; rv:1.8.1.12) Gecko/20080203 SUSE/2.0.0.12-6.1 Firefox/2.0.0.12',
+        'Mozilla/5.0 (X11; U; FreeBSD i386; ru-RU; rv:1.9.1.3) Gecko/20090913 Firefox/3.5.3',
+        'Mozilla/5.0 (X11; U; Linux i686; fr; rv:1.9.0.1) Gecko/2008070206 Firefox/2.0.0.8',
+        'Mozilla/4.0 (compatible; MSIE 5.0; Linux 2.4.20-686 i686) Opera 6.02  [en]',
+        "Mozilla/5.0 (X11; U; Linux i686; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.462.0 Safari/534.3",
+        "Mozilla/5.0 (Windows; U; Windows NT 5.2; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.462.0 Safari/534.3",
+        "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3",
+        "Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3",
+        "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_4; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3"
+    ]
+    return {'User-Agent': random.choice(UserAgents)}
 
 
 class FundsDownloader(QThread):
@@ -29,19 +46,6 @@ class FundsDownloader(QThread):
         self.result_broadcast.emit(self.fromFundID(self.fid))
         self.emitInfo('处理完毕')
 
-    # def _get_favorite(self):
-    #     try:
-    #         with open('favorite.json', 'r') as f:
-    #             all_fvr_from_file = json.loads(f.read())
-    #     except FileExistsError:
-    #         with open('favorite.json', 'w') as f:
-    #             return
-    #     self.emitInfo('开始加载收藏基金数据')
-    #     ret = self.fromFundID(all_fvr_from_file)
-    #     for each in ret:
-    #         each.append('已收藏')
-    #     return ret
-
     def fromFundID(self, ids):
         ret = []
         n_ids = 0
@@ -49,10 +53,12 @@ class FundsDownloader(QThread):
         for fvr in ids:
             while True:
                 try:
-                    req = requests.get('http://fund.eastmoney.com/{}.html'.format(fvr))
+                    req = requests.get('http://fund.eastmoney.com/{}.html'.format(fvr), headers=get_headers())
                     break
-                except (ConnectionError, TimeoutError):
-                    print('Bad connection, try again.')
+                except requests.exceptions.RequestException as err:
+                    time.sleep(1)
+                    print('Bad connection, try again. code: {}'.format(err))
+
             if req.ok is False:
                 return []
             soup = bsoup(req.content, 'lxml')
@@ -60,8 +66,7 @@ class FundsDownloader(QThread):
             tp = [fvr, soup.find('div', {'class': 'fundDetail-tit'}).text.split('(')[0], '', '']
             tp.extend([soup.find('dl', {'class': 'dataItem02'}).find('dd', {'class': 'dataNums'}).span.text,
                        soup.find('dl', {'class': 'dataItem03'}).find('dd', {'class': 'dataNums'}).span.text,
-                       soup.find('dl', {'class': 'dataItem02'}).find('dd', {
-                           'class': 'dataNums'}).span.find_next_sibling().text[:-1]])
+                       soup.find('dl', {'class': 'dataItem02'}).find('dd', {'class': 'dataNums'}).span.find_next_sibling().text[:-1]])
             for _n in range(1, 9):
                 if _n == 5:
                     continue
@@ -73,6 +78,7 @@ class FundsDownloader(QThread):
             n_ids += 1
             self.emitInfo('初始化 {}'.format(tp[1]))
             self.send_to_display_info2.emit((n_ids, len(ids)))
+            time.sleep(3)
         return self._get_addition_info(ret)
 
     def _get_addition_info(self, funds):
@@ -89,6 +95,7 @@ class FundsDownloader(QThread):
                 each.append('已收藏')
             n_finished += 1
             self.send_to_display_info2.emit((n_finished, len(funds)))
+            time.sleep(3)
         return funds
 
     def _dl_fund_info(self, fid):
@@ -98,19 +105,20 @@ class FundsDownloader(QThread):
         while True:
             try:
                 cooked_info = self._beautiful_pages(requests.get("http://fund.eastmoney.com/pingzhongdata/{}.js"
-                                                             .format(fid), timeout=5).text)
-                break
-            except (ConnectionError, TimeoutError):
-                print('Bad connection, try again.')
-        # 业绩评分
-        fund_score = cooked_info['Data_performanceEvaluation']['avr']
-        # 基金经理, 经理评分
-        managers = [(each['id'], each['name'], each['power']['avr']) for each in cooked_info['Data_currentFundManager']]
-        # 基金规模
-        scales = cooked_info['Data_fluctuationScale']['series'][-1]['y']
-        return {'score': fund_score, 'manager': managers, 'scale': scales}
+                                                                 .format(fid), headers=get_headers(), timeout=5).text)
+                # 业绩评分
+                fund_score = cooked_info['Data_performanceEvaluation']['avr']
+                # 基金经理, 经理评分
+                managers = [(each['id'], each['name'], each['power']['avr']) for each in
+                            cooked_info['Data_currentFundManager']]
+                # 基金规模
+                scales = cooked_info['Data_fluctuationScale']['series'][-1]['y']
+                return {'score': fund_score, 'manager': managers, 'scale': scales}
+            except requests.exceptions.RequestException as err:
+                print('Bad connection, try again. code: {}'.format(err))
 
-    def _beautiful_pages(self, text):
+    @staticmethod
+    def _beautiful_pages(text):
         """
             对下载的基金详细情况进行裁减处理
         """
@@ -126,6 +134,14 @@ class FundsDownloader(QThread):
             except IndexError:
                 continue
         return retDict
+
+    @staticmethod
+    def isTradingTime():
+        if datetime.now().isoweekday() is 6 or datetime.now().isoweekday() is 7:
+            return False
+        if datetime.now().hour >= 15 or datetime.now().hour < 9:
+            return False
+        return True
 
     def emitInfo(self, text):
         self.send_to_display_info.emit('[{}] {}'.format(datetime.now().strftime('%H:%M:%S'), text))
@@ -155,10 +171,11 @@ class FundSelctor(FundsDownloader):
         self.emitInfo('下载所有基金数据')
         while True:
             try:
-                req = requests.post('http://fund.eastmoney.com/data/rankhandler.aspx', data={'op': 'ph', 'pn': 10000}).text
+                req = requests.post('http://fund.eastmoney.com/data/rankhandler.aspx', data={'op': 'ph', 'pn': 10000},
+                                    headers=get_headers()).text
                 break
-            except BaseException:
-                print('Bad connection, try again.')
+            except BaseException as err:
+                print('Bad connection, try again. code: {}'.format(err))
         self.emitInfo('下载完毕')
         req = req.split('=')[1]
         # 截出[]之间的数据，然后去头去尾，最后根据","来分切成一个list
@@ -170,7 +187,7 @@ class FundSelctor(FundsDownloader):
         # 去掉不想要的基金类型，以后可增加成可选功能，现在暂时不用
         f = []
         for each in funds:
-            if 'QDII' in each[1] or '纳斯达克' in each[1] or '标普' in each[1] or '全球' in each[1] or '美国' in each[1]\
+            if 'QDII' in each[1] or '纳斯达克' in each[1] or '标普' in each[1] or '全球' in each[1] or '美国' in each[1] \
                     or '德国' in each[1] or '国际' in each[1]:
                 continue
             if '债' in each[1]:
@@ -188,7 +205,7 @@ class FundSelctor(FundsDownloader):
         """
         his = ['周涨幅', '月涨幅', '季涨幅', '半年涨幅', '一年涨幅', '两年涨幅', '三年涨幅']
         compr = None
-        for each in his[:his.index(self.history_kw)+1]:
+        for each in his[:his.index(self.history_kw) + 1]:
             self.emitInfo('{} 排名中'.format(each))
             if compr is None:
                 compr = self._trunc_data(self._rank_fund(each))
@@ -221,7 +238,7 @@ class FundSelctor(FundsDownloader):
         return [ea for ea in datal if ea in datar]
 
 
-class FundRefresher(QThread):
+class FundRefresher(FundsDownloader):
     result_feedback = pyqtSignal(dict)
     infot_text_broadcast = pyqtSignal(str)
 
@@ -237,13 +254,15 @@ class FundRefresher(QThread):
             while True:
                 try:
                     url = 'http://fund.eastmoney.com/{}.html'.format(each)
-                    req_text = requests.get(url, timeout=5).content.decode('gb2312', 'ignore')
-                    break
-                except:
-                    print('Bad connection, try again.')
-            # 匹配出净值数据, 返回的tuple中0为净值日期, 1为当前净值
-            dt = re.search(r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%',
+                    req_text = requests.get(url, timeout=5, headers=get_headers()).content.decode('gb2312', 'ignore')
+                    # 匹配出净值数据, 返回的tuple中0为净值日期, 1为当前净值
+                    dt = re.search(
+                        r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%',
                         req_text).groups()
+                    break
+                except BaseException as err:
+                    time.sleep(2)
+                    print('Bad connection, try again. code: {}'.format(err))
             # 比较当前日期是否和净值日期一样, 如果一样说明已经是最新的, 然后开始打包.
             if datetime.now().strftime('%d') == dt[0][-2:]:
                 fbDict[each] = (dt[1], dt[2])
@@ -255,15 +274,17 @@ class FundRefresher(QThread):
             while True:
                 try:
                     url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
-                    req_text = requests.get(url, timeout=5).text
+                    req_text = requests.get(url, timeout=5, headers=get_headers()).text
                     break
                 except:
+                    time.sleep(1)
                     print('Bad connection, try again.')
             try:
                 json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
             except:
                 continue
             fbDict[each] = json_d['gszzl']
+            time.sleep(3)
         return fbDict
 
     def run(self):
@@ -271,7 +292,7 @@ class FundRefresher(QThread):
             if self.state == 1:
                 self.infot_text_broadcast.emit('[{}] 正在自动更新...'.format(datetime.now().strftime('%H:%M:%S')))
                 self.result_feedback.emit({'Data': ''})
-                if isTradingTime():
+                if self.isTradingTime():
                     emitPak = self.reckonVal(self.feadbackFunds)
                 else:
                     emitPak = self.freshVal(self.feadbackFunds)
@@ -300,13 +321,13 @@ class FundRefresher(QThread):
         return self.state
 
 
-class StockRefresher(QThread):
+class StockRefresher(FundsDownloader):
     stock_val_brodcast = pyqtSignal(str, name='stock_value')
 
     def __init__(self, parent=None):
         super(StockRefresher, self).__init__(parent)
         self.stockUrl = \
-            'http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401'
+                'http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401'
 
     def run(self):
         self.refreshing()
@@ -316,15 +337,15 @@ class StockRefresher(QThread):
             ret = ''
             while True:
                 try:
-                    rst = requests.get(self.stockUrl, timeout=5).text.split(';\n')
-                    rst = [x[x.find('"')+1:x.rfind('"')].split(',') for x in rst]
+                    rst = requests.get(self.stockUrl, timeout=5, headers=get_headers()).text.split(';\n')
+                    rst = [x[x.find('"') + 1:x.rfind('"')].split(',') for x in rst]
                     break
-                except:
-                    print('Bad connection, try again.')
+                except BaseException as err:
+                    print('Bad connection, try again. code: {}'.format(err))
             for index, each in enumerate(['sh000001', 'sz399001', 'sz399006', 'sz399905', 'sz399300', 'sz399401']):
                 ret += self.drawColor(rst[index], each)
             self.stock_val_brodcast.emit(ret)
-            if isTradingTime() is False:
+            if self.isTradingTime() is False:
                 return
             time.sleep(5)
 
@@ -337,13 +358,5 @@ class StockRefresher(QThread):
             val[3] = val[3].replace('-', '↓')
         else:
             val[3] = '↑' + val[3]
-        return '{}: <font color="{}">{}{}{}%</font>{}'\
-            .format(name[code], color, round(float(val[1]), 2), '&nbsp;'*4, val[3], '&nbsp;'*8)
-
-
-def isTradingTime():
-    if datetime.now().isoweekday() is 6 or datetime.now().isoweekday() is 7:
-        return False
-    if datetime.now().hour >= 15 or datetime.now().hour < 9:
-        return False
-    return True
+        return '{}: <font color="{}">{}{}{}%</font>{}' \
+            .format(name[code], color, round(float(val[1]), 2), '&nbsp;' * 4, val[3], '&nbsp;' * 8)
