@@ -5,7 +5,7 @@ from PyQt5.Qt import QDesktopServices
 import gf_core2
 import json, re
 from datetime import datetime
-
+import os
 
 class GF_MainWindow(QWidget):
     def __init__(self, parent=None):
@@ -85,7 +85,7 @@ class GF_MainWindow(QWidget):
         self.display_table.setSelectionMode(QTableWidget.SingleSelection)
         self.display_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.display_table.setColumnCount(17)
-        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '累计', '估算(%)',
+        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '累计', '估算',
                                                       '日涨', '周涨', '月涨', '季涨', '半年', '今年', '一年',
                                                       '两年', '三年', '规模', '收藏'])
         mlayout.addLayout(optionlayout)
@@ -235,7 +235,7 @@ class GF_MainWindow(QWidget):
                     color = self.setValueColor(each[2])
                     row = funds_dict[each[0]]
                     item = self.display_table.item(row, 6)
-                    item.setText(each[2] + '%')
+                    item.setText(each[2] + '% new')
                     item.setForeground(color)
                     item.setTextAlignment(Qt.AlignCenter)
                     item = self.display_table.item(row, 3)
@@ -255,7 +255,7 @@ class GF_MainWindow(QWidget):
         if _item.column() == 0:
             # 打开基金的详细信息链接 (本地打开, 开发中...)
             QDesktopServices().openUrl(QUrl('http://fund.eastmoney.com/{}.html'.format(_item.toolTip())))
-        if _item.column() == 15:
+        if _item.column() == 16:
             # 收藏功能
             if _item.text() == '已收藏':
                 _item_0 = self.display_table.item(_item.row(), 0)
@@ -273,7 +273,7 @@ class GF_MainWindow(QWidget):
                 _item_0.setForeground(Qt.darkRed)
                 _item.setText('已收藏')
                 _item.setForeground(Qt.gray)
-        if _item.column() == 16:
+        if _item.column() == 17:
             # 从表格显示中删除当前被点击的基金(从显示池中删除, 然后保存当前显示序列, 然后按序列重新铺)
             reply = QMessageBox().question(self, '删除基金',
                                            '你确定要移除"{}"吗?'.format(self.display_table.item(_item.row(), 0).text()),

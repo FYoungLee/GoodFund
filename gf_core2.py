@@ -12,10 +12,11 @@ from json import decoder
 from datetime import datetime
 from bs4 import BeautifulSoup
 from PyQt5.QtCore import QProcess, pyqtSignal
+import os
 import asyncio
 import aiohttp
 
-FUNDS_UPDATE_TIMER = 12
+FUNDS_UPDATE_TIMER = 30
 STOCKS_UPDATA_TIMER = 5
 
 
@@ -162,17 +163,19 @@ class FundsManager(QProcess):
 
     @staticmethod
     async def doasytask(tasks, result, url):
-        async def geturl(fid):
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.get(url.format(fid), timeout=10) as resp:
-                        ret = await resp.read()
-                        return fid, ret
-                except (asyncio.TimeoutError, aiohttp.errors.ClientError):
-                    pass
+        async def geturl(sem, fid):
+            async with sem:
+                async with aiohttp.ClientSession() as session:
+                    try:
+                        async with session.get(url.format(fid), timeout=10) as resp:
+                            ret = await resp.read()
+                            return fid, ret
+                    except (asyncio.TimeoutError, aiohttp.errors.ClientError):
+                        pass
         resps = []
+        sem = asyncio.Semaphore(8)
         for fid in tasks:
-            resps.append(asyncio.ensure_future(geturl(fid)))
+            resps.append(asyncio.ensure_future(geturl(sem, fid)))
         result.extend(await asyncio.gather(*resps))
 
     @staticmethod
