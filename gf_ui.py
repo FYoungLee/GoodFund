@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QComboBox, QSlide
     QTableWidgetItem, QPushButton, QHeaderView, QLineEdit
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.Qt import QDesktopServices
-import gf_core
+import gf_core3
 import json, re
 from datetime import datetime
 
@@ -98,7 +98,7 @@ class GF_MainWindow(QWidget):
 
         self.setLayout(mlayout)
         # 载入收藏基金
-        self.updater = gf_core.Updater()
+        self.updater = gf_core3.Updater()
         self.updater.fund_sender.connect(self.placeFunds)
         self.updater.market_sender.connect(lambda x: self.marketsDisplay.setText(x))
         self.updater.start()
