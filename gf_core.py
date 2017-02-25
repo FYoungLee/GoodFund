@@ -10,12 +10,11 @@ import re
 from json import decoder
 from datetime import datetime
 from bs4 import BeautifulSoup
-from threading import Thread, Timer
+from threading import Timer
 from PyQt5.QtCore import QProcess, pyqtSignal
 import asyncio
 import aiohttp
 import requests
-import logging
 
 FUNDS_UPDATE_TIMER = 30
 MARKETS_UPDATE_TIMER = 5

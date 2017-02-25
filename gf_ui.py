@@ -1,11 +1,10 @@
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QComboBox, QSlider, QLabel, QTableWidget, \
-    QTableWidgetItem, QPushButton, QHeaderView, QMessageBox, QLineEdit
+    QTableWidgetItem, QPushButton, QHeaderView, QLineEdit
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.Qt import QDesktopServices
 import gf_core
 import json, re
 from datetime import datetime
-import logging
 
 
 class GF_MainWindow(QWidget):
