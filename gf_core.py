@@ -1,189 +1,326 @@
 """
-    从天天基金网，根据基金的排名情况，选出业绩长期优良的基金，然后下载其数据，最后制作成html文件以供查阅。
     作者： Fyoung Lix
-    日期： 2016年12月22日
-    版本： v1.1
+    日期： 2017年1月24日
+    版本： v1.2
 """
 # -*- coding: utf-8 -*-
-import requests
+
 import json
 import re
-import time
-import random
 from json import decoder
 from datetime import datetime
-from bs4 import BeautifulSoup as bsoup
-from PyQt5.QtCore import QThread, pyqtSignal
+from bs4 import BeautifulSoup
+from threading import Thread, Timer
+from PyQt5.QtCore import QProcess, pyqtSignal
+import asyncio
+import aiohttp
+import requests
+import logging
+
+FUNDS_UPDATE_TIMER = 30
+MARKETS_UPDATE_TIMER = 5
 
 
-def get_headers():
-    UserAgents = [
-        'Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9a2pre) Gecko/20061231 Minefield/3.0a2pre',
-        'Mozilla/5.0 (X11; U; Linux x86_64; de; rv:1.8.1.12) Gecko/20080203 SUSE/2.0.0.12-6.1 Firefox/2.0.0.12',
-        'Mozilla/5.0 (X11; U; FreeBSD i386; ru-RU; rv:1.9.1.3) Gecko/20090913 Firefox/3.5.3',
-        'Mozilla/5.0 (X11; U; Linux i686; fr; rv:1.9.0.1) Gecko/2008070206 Firefox/2.0.0.8',
-        'Mozilla/4.0 (compatible; MSIE 5.0; Linux 2.4.20-686 i686) Opera 6.02  [en]',
-        "Mozilla/5.0 (X11; U; Linux i686; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.462.0 Safari/534.3",
-        "Mozilla/5.0 (Windows; U; Windows NT 5.2; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.462.0 Safari/534.3",
-        "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3",
-        "Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3",
-        "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_6_4; en-US) AppleWebKit/534.3 (KHTML, like Gecko) Chrome/6.0.461.0 Safari/534.3"
-    ]
-    return {'User-Agent': random.choice(UserAgents)}
+class Tasks:
+    FundsFull = 1
+    FundsEst = 2
+    FundsVal = 3
+    Stocks = 4
+    StocksInFund = 5
 
 
-class FundsDownloader(QThread):
-    result_broadcast = pyqtSignal(list)
-    send_to_display_info = pyqtSignal(str)
-    send_to_display_info2 = pyqtSignal(tuple)
+class StockInFund:
+    def __init__(self, market, _id, ratio, _name=None, price=None, pe=0, pb=0, qr=0):
+        self.market = market
+        self.id = _id
+        self.ratio = ratio
+        self.name = _name
+        self.price = price
+        self.QR = qr
+        self.PE = pe
+        self.PB = pb
+        self.url_ptn = 'http://nuff.eastmoney.com/EM_Finance2015TradeInterface/JS.ashx?id={}'
 
-    def __init__(self, fid=None, favored=False, parent=None):
-        super(FundsDownloader, self).__init__(parent)
-        self.fid = fid
-        self.favored = favored
+    async def update(self):
+        _n = '1' if self.market == 'sh' else '2'
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.url_ptn.format(self.id + _n), timeout=6) as response:
+                    raw_data = await response.text()
+                    if not raw_data:
+                        return
+                    data = re.findall(r'\[(.*?)\]', raw_data)[1].replace('"', '').split(',')
+                    self.name = data[2]
+                    self.price = float(data[3])
+                    self.QR = float(data[36])
+                    try:
+                        self.PE = float(data[38])
+                    except ValueError:
+                        pass
+                    self.PB = float(data[43])
+        except asyncio.TimeoutError:
+            pass
 
-    def run(self):
-        self.result_broadcast.emit(self.fromFundID(self.fid))
-        self.emitInfo('处理完毕')
 
-    def fromFundID(self, ids):
-        ret = []
-        n_ids = 0
-        self.send_to_display_info2.emit((n_ids, len(ids)))
-        for fvr in ids:
-            while True:
+class TheFund:
+    def __init__(self, fid):
+        self.id = fid
+        self.name = None
+        self.estimate = None
+        self.current_value = None
+        self.fresh = False
+        self.latest_change = None
+        self.total_value = None
+        self.perform = []
+        self.score = None
+        self.managers = {}
+        self.scales = None
+        self.stocks = []
+        self.avg_PE = 0
+        self.avg_PB = 0
+
+    @property
+    def initialized(self):
+        return self.name is not None and self.score is not None
+
+    def calculate_averages(self):
+        _ratio = _tt_pe = _tt_pb = 0
+        if _ratio:
+            return
+        for each in self.stocks:
+            _ratio += each.ratio
+            _tt_pe += each.PE * each.ratio
+            _tt_pb += each.PB * each.ratio
+        self.avg_PE = _tt_pe / _ratio
+        self.avg_PB = _tt_pb / _ratio
+
+    def update_baseinfo(self, raw_data):
+        data = BeautifulSoup(raw_data, 'lxml')
+        self.name = data.find('div', {'class': 'fundDetail-tit'}).text.split('(')[0]
+        self.estimate = data.find('dl', {'class': 'dataItem01'}).find('dd', {'class': 'dataNums'}).findAll('span')[-1].text[:-1]
+        re_ptn = r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%'
+        date, val, changed = re.search(re_ptn, raw_data).groups()
+        self.fresh = True if datetime.now().strftime('%Y-%m-%d') == date else False
+        self.current_value = val
+        self.latest_change = changed
+        self.total_value = data.find('dl', {'class': 'dataItem03'}).find('dd', {'class': 'dataNums'}).span.text
+        self.perform = [x.text[:-1].strip() for x in data.find('li', {'id': 'increaseAmount_stage'}).findAll('tr')[1].findAll('td')][1:]
+        top10_stocks = re.findall(r'<a href="http://quote.eastmoney.com/(\w{2})(\d{6})\.html" title=".*?">.*?</a>.+?<td class="alignRight bold">(.*?)%</td>', raw_data)
+        for each in top10_stocks:
+            self.stocks.append(StockInFund(each[0], each[1], float(each[2])))
+
+    async def initialize(self):
+        async with aiohttp.ClientSession() as session:
+            await asyncio.wait((self.get_baseinfo(session), self.get_scores(session)))
+
+    async def update_stocks(self, session):
+        futures = []
+        for each in self.stocks:
+            future = asyncio.ensure_future(each.update(session))
+            futures.append(future)
+            futures.append(self.get_scores(session))
+        await asyncio.gather(*futures)
+
+    async def get_baseinfo(self, session):
+        url_ptn = 'http://fund.eastmoney.com/{}.html'
+        try:
+            async with session.get(url_ptn.format(self.id), timeout=6) as response:
+                raw_data = await response.text()
+                self.update_baseinfo(raw_data)
+        except asyncio.TimeoutError:
+            pass
+
+    async def get_scores(self, session):
+        url_ptn = 'http://fund.eastmoney.com/pingzhongdata/{}.js'
+
+        def beautiful_pages(text):
+            retDict = {}
+            for each in text.split(';'):
                 try:
-                    req = requests.get('http://fund.eastmoney.com/{}.html'.format(fvr), headers=get_headers())
-                    break
-                except requests.exceptions.RequestException as err:
-                    time.sleep(1)
-                    print('Bad connection, try again. code: {}'.format(err))
-
-            if req.ok is False:
-                return []
-            soup = bsoup(req.content, 'lxml')
-            _inc = [x.text[:-1] for x in soup.find('li', {'id': 'increaseAmount_stage'}).findAll('tr')[1].findAll('td')]
-            tp = [fvr, soup.find('div', {'class': 'fundDetail-tit'}).text.split('(')[0], '', '']
-            tp.extend([soup.find('dl', {'class': 'dataItem02'}).find('dd', {'class': 'dataNums'}).span.text,
-                       soup.find('dl', {'class': 'dataItem03'}).find('dd', {'class': 'dataNums'}).span.text,
-                       soup.find('dl', {'class': 'dataItem02'}).find('dd', {'class': 'dataNums'}).span.find_next_sibling().text[:-1]])
-            for _n in range(1, 9):
-                if _n == 5:
-                    continue
-                try:
-                    tp.append(_inc[_n])
+                    e_list = each.split('var')[1].strip().split('=')
+                    try:
+                        retDict[e_list[0].strip()] = json.loads(e_list[1].strip())
+                    except decoder.JSONDecodeError:
+                        retDict[e_list[0].strip()] = e_list[1].strip()
                 except IndexError:
-                    tp.append('')
-            ret.append(tp)
-            n_ids += 1
-            self.emitInfo('初始化 {}'.format(tp[1]))
-            self.send_to_display_info2.emit((n_ids, len(ids)))
-            time.sleep(3)
-        return self._get_addition_info(ret)
+                    continue
+            return retDict
 
-    def _get_addition_info(self, funds):
-        n_finished = 0
-        self.send_to_display_info2.emit((n_finished, len(funds)))
-        for each in funds:
-            self.emitInfo('获取 {} 详细信息'.format(each[1]))
-            add = self._dl_fund_info(each[0])
-            each[2] = add['score']
-            each[3] = add['manager']
-            each.insert(6, 'null')
-            each.append(add['scale'])
-            if self.favored:
-                each.append('已收藏')
-            n_finished += 1
-            self.send_to_display_info2.emit((n_finished, len(funds)))
-            time.sleep(3)
-        return funds
+        try:
+            async with session.get(url_ptn.format(self.id), timeout=6) as response:
+                raw_data = await response.read()
+                data = beautiful_pages(raw_data.decode(errors='ignore'))
+                self.score = data['Data_performanceEvaluation']['avr'] \
+                    if '暂无数据' not in data['Data_performanceEvaluation']['avr'] else ''
+                for each in data['Data_currentFundManager']:
+                    self.managers[each['id']] = {'name': each['name'],
+                                                 'score': each['power']['avr'] if '暂无数据' not in each['power']['avr'] else ''}
+                self.scales = data['Data_fluctuationScale']['series'][-1]['y']
+        except asyncio.TimeoutError:
+            pass
 
-    def _dl_fund_info(self, fid):
-        """
-            下载基金详细情况
-        """
-        while True:
-            try:
-                cooked_info = self._beautiful_pages(requests.get("http://fund.eastmoney.com/pingzhongdata/{}.js"
-                                                                 .format(fid), headers=get_headers(), timeout=5).text)
-                # 业绩评分
-                fund_score = cooked_info['Data_performanceEvaluation']['avr']
-                # 基金经理, 经理评分
-                managers = [(each['id'], each['name'], each['power']['avr']) for each in
-                            cooked_info['Data_currentFundManager']]
-                # 基金规模
-                scales = cooked_info['Data_fluctuationScale']['series'][-1]['y']
-                return {'score': fund_score, 'manager': managers, 'scale': scales}
-            except requests.exceptions.RequestException as err:
-                print('Bad connection, try again. code: {}'.format(err))
+    async def update_offtime(self):
+        url_ptn = 'http://fund.eastmoney.com/{}.html'
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url_ptn.format(self.id), timeout=6) as resp:
+                    raw_data = await resp.text()
+                    re_ptn = r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%'
+                    date, val, changed = re.search(re_ptn, raw_data).groups()
+                    self.fresh = True if datetime.now().strftime('%Y-%m-%d') == date else False
+                    self.current_value = val
+                    self.latest_change = changed
+        except asyncio.TimeoutError:
+            pass
 
-    @staticmethod
-    def _beautiful_pages(text):
-        """
-            对下载的基金详细情况进行裁减处理
-        """
-        ret = text.split(';')
-        retDict = {}
-        for each in ret:
-            try:
-                e_list = each.split('var')[1].strip().split('=')
-                try:
-                    retDict[e_list[0].strip()] = json.loads(e_list[1].strip())
-                except decoder.JSONDecodeError:
-                    retDict[e_list[0].strip()] = e_list[1].strip()
-            except IndexError:
-                continue
-        return retDict
+    async def update_ontime(self):
+        url_ptn = 'http://fundgz.1234567.com.cn/js/{}.js'
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url_ptn.format(self.id), timeout=6) as resp:
+                    raw = await resp.text()
+                    self.estimate = re.search(r'"gszzl":"(.*?)"', raw).group(1)
+        except asyncio.TimeoutError:
+            pass
+
+    def __eq__(self, other):
+        return self.id == other.id
+
+
+class Updater(QProcess):
+    fund_sender = pyqtSignal(list, name='fund')
+    market_sender = pyqtSignal(str, name='market')
+
+    def __init__(self):
+        super().__init__()
+        self.funds = []
+        self.markets = ''
+        self.fundtimer = self.startTimer(FUNDS_UPDATE_TIMER*1000)
+        self.markettimer = self.startTimer(MARKETS_UPDATE_TIMER*1000)
+
+    def timerEvent(self, QTimerEvent):
+        if QTimerEvent.timerId() == self.fundtimer:
+            self.funds_updater()
+        if QTimerEvent.timerId() == self.markettimer:
+            self.markets_updater()
+
+    def add_fund_to_update(self, fid):
+        fund = TheFund(fid)
+        if fund not in self.funds:
+            self.funds.append(fund)
+
+    def remove(self, fid):
+        for fund in self.funds:
+            if fund.id == fid:
+                self.funds.remove(fund)
+                return
+
+    def init_checker(self):
+        uninit_list = []
+        for fund in self.funds:
+            if not fund.initialized:
+                uninit_list.append(fund)
+        if uninit_list:
+            self.funds_init(uninit_list)
+        Timer(1, self.init_checker).start()
+
+    def funds_updater(self):
+        futures = []
+
+        for each in self.funds:
+            # 交易时段判断
+            if each.initialized:
+                if self.isTradingTime():
+                    futures.append(asyncio.ensure_future(each.update_ontime()))
+                    for stock in each.stocks:
+                        futures.append(stock.update())
+                else:
+                    if each.avg_PE == 0 and each.avg_PB == 0:
+                        for stock in each.stocks:
+                            futures.append(stock.update())
+                    futures.append(asyncio.ensure_future(each.update_offtime()))
+            else:
+                futures.append(asyncio.ensure_future(each.initialize()))
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(asyncio.gather(*futures))
+        pak = []
+        for each in self.funds:
+            if each.initialized:
+                pak.append(each)
+        self.fund_sender.emit(pak)
+
+    def markets_updater(self):
+        if not self.isTradingTime() and self.markets is not '':
+            return
+        raw_data = requests.get('http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401')
+        try:
+            raws = [x.split(',')[:4] for x in re.findall(r'"(.*)"', raw_data.text)]
+            self.markets = ''
+            for each in raws:
+                color = 'red'
+                if '-' in each[2]:
+                    color = 'green'
+                else:
+                    each[3] = '+' + each[3]
+                each[2] = '[{}]'.format(each[2])
+                self.markets += '{}: <font color="{}">{}%</font>{}'.format(each[0], color, '&nbsp;'.join(each[1:]), '&nbsp;' * 4)
+                self.market_sender.emit(self.markets)
+        except TypeError:
+            return
+
+    def get_filtered_list(self, kw, rank):
+        raw_data = requests.get('http://fund.eastmoney.com/data/rankhandler.aspx?op=ph&pn=10000')
+        try:
+            rst = FundsFilter(kw, rank, raw_data.text).filter()
+            for fund in rst:
+                self.add_fund_to_update(fund[0])
+        except TypeError:
+            pass
 
     @staticmethod
     def isTradingTime():
-        if datetime.now().isoweekday() is 6 or datetime.now().isoweekday() is 7:
+        weekday = datetime.now().isoweekday()
+        if weekday in (6, 7):
             return False
-        if datetime.now().hour >= 15 or datetime.now().hour < 9:
+        hour = datetime.now().hour
+        if hour >= 15 or hour < 9:
+            return False
+        if hour == 11 and datetime.now().minute > 30:
+            return False
+        if hour == 12:
             return False
         return True
 
-    def emitInfo(self, text):
-        self.send_to_display_info.emit('[{}] {}'.format(datetime.now().strftime('%H:%M:%S'), text))
 
-
-class FundSelctor(FundsDownloader):
-    def __init__(self, kw, rank, fl_ist, parent=None):
-        super(FundSelctor, self).__init__(parent=parent)
-        self.history_kw = kw
+class FundsFilter:
+    def __init__(self, kw, rank, funds):
+        self.kw = kw
         self.rank = rank
-        self.all_funds = None
-        self.num_funds = 0
-        self.filter_list = fl_ist
-        self.selected_funds = []
+        self.funds_dat = funds
 
-    def run(self):
-        self._dl_data()
-        self._get_list()
-        self.selected_funds = self._get_addition_info(self.selected_funds)
-        self.result_broadcast.emit(self.selected_funds)
-        self.emitInfo('处理完毕')
+    def filter(self):
+        datas = [x.split(',') for x in re.findall(r'"(.*?)"', self.funds_dat)]
+        datas = self._funds_filter(datas)
+        his = ['周涨幅', '月涨幅', '季涨幅', '半年涨幅', '今年涨幅', '一年涨幅', '两年涨幅', '三年涨幅']
+        compr = None
+        for each in his[:his.index(self.kw) + 1]:
+            if compr is None:
+                compr = self._trunc_data(self.rank, len(datas), self._rank_fund(each, datas))
+            else:
+                compr = self._compare_data(compr, self._trunc_data(self.rank, len(datas), self._rank_fund(each, datas)))
+        return compr
 
-    def _dl_data(self):
+    @staticmethod
+    def _rank_fund(rankey, datas):
         """
-            搜索所有基金数据
+            根据关键字对基金进行排序
         """
-        self.emitInfo('下载所有基金数据')
-        while True:
-            try:
-                req = requests.post('http://fund.eastmoney.com/data/rankhandler.aspx', data={'op': 'ph', 'pn': 10000},
-                                    headers=get_headers()).text
-                break
-            except BaseException as err:
-                print('Bad connection, try again. code: {}'.format(err))
-        self.emitInfo('下载完毕')
-        req = req.split('=')[1]
-        # 截出[]之间的数据，然后去头去尾，最后根据","来分切成一个list
-        datas = req[req.find('['):req.rfind(']') + 1][2:-2].split('","')
-        self.all_funds = self._funds_filter([e.split(',') for e in datas])
-        self.num_funds = len(self.all_funds)
+        k = {'周涨幅': 7, '月涨幅': 8, '季涨幅': 9, '半年涨幅': 10, '今年涨幅': 14, '一年涨幅': 11, '两年涨幅': 12, '三年涨幅': 13}
+        filtered_list = filter(lambda x: x[k[rankey]], datas)
+        return sorted(filtered_list, key=lambda x: float(x[k[rankey]]), reverse=True)
 
-    def _funds_filter(self, funds):
+    @staticmethod
+    def _funds_filter(funds):
         # 去掉不想要的基金类型，以后可增加成可选功能，现在暂时不用
         f = []
         for each in funds:
@@ -195,168 +332,20 @@ class FundSelctor(FundsDownloader):
             if '保本' in each[1]:
                 continue
             # 统一保存成所需要的长度，以区别是否收藏了该基金
-            f.append(each[:14])
+            f.append(each)
         return f
 
-    def _get_list(self):
-        """
-            接收一个排名百分比数值，一个List的搜索关键字
-            返回一个提炼基金名单
-        """
-        his = ['周涨幅', '月涨幅', '季涨幅', '半年涨幅', '一年涨幅', '两年涨幅', '三年涨幅']
-        compr = None
-        for each in his[:his.index(self.history_kw) + 1]:
-            self.emitInfo('{} 排名中'.format(each))
-            if compr is None:
-                compr = self._trunc_data(self._rank_fund(each))
-            else:
-                compr = self._compare_data(compr, self._trunc_data(self._rank_fund(each)))
-        # 排查已经在filter list 列表里面的
-        for each in compr:
-            if each[0] in self.filter_list:
-                continue
-            self.selected_funds.append(each)
-
-    def _rank_fund(self, rankey):
-        """
-            根据关键字对基金进行排序
-        """
-        k = {'周涨幅': 7, '月涨幅': 8, '季涨幅': 9, '半年涨幅': 10, '一年涨幅': 11, '两年涨幅': 12, '三年涨幅': 13}
-        filtered_list = filter(lambda x: x[k[rankey]], self.all_funds)
-        return sorted(filtered_list, key=lambda x: float(x[k[rankey]]), reverse=True)
-
-    def _trunc_data(self, data):
+    @staticmethod
+    def _trunc_data(rank, length, data):
         """
             根据提供的排名情况，进行靠前百分比筛选
         """
-        return data[:int(self.num_funds / 100 * self.rank)]
+        return data[:int(length / 100 * rank)]
 
-    def _compare_data(self, datal, datar):
+    @staticmethod
+    def _compare_data(datal, datar):
         """
             比较两个List，返回其交集
         """
         return [ea for ea in datal if ea in datar]
 
-
-class FundRefresher(FundsDownloader):
-    result_feedback = pyqtSignal(dict)
-    infot_text_broadcast = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super(FundRefresher, self).__init__(parent)
-        self.feadbackFunds = ()
-        self.allFunds = {}
-        self.state = 1
-
-    def freshVal(self, fids):
-        fbDict = {}
-        for each in fids:
-            while True:
-                try:
-                    url = 'http://fund.eastmoney.com/{}.html'.format(each)
-                    req_text = requests.get(url, timeout=5, headers=get_headers()).content.decode('gb2312', 'ignore')
-                    # 匹配出净值数据, 返回的tuple中0为净值日期, 1为当前净值
-                    dt = re.search(
-                        r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%',
-                        req_text).groups()
-                    break
-                except BaseException as err:
-                    time.sleep(2)
-                    print('Bad connection, try again. code: {}'.format(err))
-            # 比较当前日期是否和净值日期一样, 如果一样说明已经是最新的, 然后开始打包.
-            if datetime.now().strftime('%d') == dt[0][-2:]:
-                fbDict[each] = (dt[1], dt[2])
-        return fbDict
-
-    def reckonVal(self, fids):
-        fbDict = {}
-        for each in fids:
-            while True:
-                try:
-                    url = 'http://fundgz.1234567.com.cn/js/{}.js'.format(each)
-                    req_text = requests.get(url, timeout=5, headers=get_headers()).text
-                    break
-                except:
-                    time.sleep(1)
-                    print('Bad connection, try again.')
-            try:
-                json_d = json.loads(req_text[req_text.find('{'):req_text.rfind(')')])
-            except:
-                continue
-            fbDict[each] = json_d['gszzl']
-            time.sleep(3)
-        return fbDict
-
-    def run(self):
-        while True:
-            if self.state == 1:
-                self.infot_text_broadcast.emit('[{}] 正在自动更新...'.format(datetime.now().strftime('%H:%M:%S')))
-                self.result_feedback.emit({'Data': ''})
-                if self.isTradingTime():
-                    emitPak = self.reckonVal(self.feadbackFunds)
-                else:
-                    emitPak = self.freshVal(self.feadbackFunds)
-                self.result_feedback.emit(emitPak)
-                time.sleep(3)
-            elif self.state == 2:
-                self.infot_text_broadcast.emit('[{}] 正在手动更新...'.format(datetime.now().strftime('%H:%M:%S')))
-                self.result_feedback.emit({'Data': ''})
-                time.sleep(0.3)
-                emitPak = self.reckonVal(self.feadbackFunds)
-                self.result_feedback.emit(emitPak)
-                emitPak = self.freshVal(self.feadbackFunds)
-                self.result_feedback.emit(emitPak)
-                self.state = 1
-            elif self.state == 0:
-                self.infot_text_broadcast.emit('[{}] 更新暂停'.format(datetime.now().strftime('%H:%M:%S')))
-                time.sleep(1)
-
-    def setFunds(self, funds):
-        self.feadbackFunds = funds
-
-    def changeState(self, num):
-        self.state = num
-
-    def currentState(self):
-        return self.state
-
-
-class StockRefresher(FundsDownloader):
-    stock_val_brodcast = pyqtSignal(str, name='stock_value')
-
-    def __init__(self, parent=None):
-        super(StockRefresher, self).__init__(parent)
-        self.stockUrl = \
-                'http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401'
-
-    def run(self):
-        self.refreshing()
-
-    def refreshing(self):
-        while True:
-            ret = ''
-            while True:
-                try:
-                    rst = requests.get(self.stockUrl, timeout=5, headers=get_headers()).text.split(';\n')
-                    rst = [x[x.find('"') + 1:x.rfind('"')].split(',') for x in rst]
-                    break
-                except BaseException as err:
-                    print('Bad connection, try again. code: {}'.format(err))
-            for index, each in enumerate(['sh000001', 'sz399001', 'sz399006', 'sz399905', 'sz399300', 'sz399401']):
-                ret += self.drawColor(rst[index], each)
-            self.stock_val_brodcast.emit(ret)
-            if self.isTradingTime() is False:
-                return
-            time.sleep(5)
-
-    def drawColor(self, val, code):
-        name = {'sh000001': '上证', 'sz399001': '深证', 'sz399006': '创业',
-                'sz399905': '中证500', 'sz399300': '沪深300', 'sz399401': '中小'}
-        color = 'red'
-        if '-' in val[3]:
-            color = 'green'
-            val[3] = val[3].replace('-', '↓')
-        else:
-            val[3] = '↑' + val[3]
-        return '{}: <font color="{}">{}{}{}%</font>{}' \
-            .format(name[code], color, round(float(val[1]), 2), '&nbsp;' * 4, val[3], '&nbsp;' * 8)
