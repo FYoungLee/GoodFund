@@ -129,8 +129,10 @@ class GF_MainWindow(QWidget):
     def synClicked(self):
         if '更新中' in self.syn_btn.text():
             self.syn_btn.setText('更新停止')
+            self.updater.stopTimer()
         else:
             self.syn_btn.setText('更新中...')
+            self.updater.startUpdateTimer()
 
     def placeFunds(self, funds):
         start = datetime.now().timestamp()

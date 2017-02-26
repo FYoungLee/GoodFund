@@ -21,14 +21,6 @@ MARKETS_UPDATE_TIMER = 5
 TIMEOUT = 5
 
 
-class Tasks:
-    FundsFull = 1
-    FundsEst = 2
-    FundsVal = 3
-    Stocks = 4
-    StocksInFund = 5
-
-
 class StockInFund:
     def __init__(self, market, _id, ratio, _name=None, price=None, pe=0, pb=0, qr=0):
         self.market = market
@@ -200,8 +192,8 @@ class Updater(QProcess):
         super().__init__()
         self.funds = []
         self.markets = ''
-        self.fundtimer = self.startTimer(FUNDS_UPDATE_TIMER*1000)
-        self.markettimer = self.startTimer(MARKETS_UPDATE_TIMER*1000)
+        self.fundtimer = self.startTimer(FUNDS_UPDATE_TIMER * 1000)
+        self.markettimer = self.startTimer(MARKETS_UPDATE_TIMER * 1000)
 
     def timerEvent(self, QTimerEvent):
         if QTimerEvent.timerId() == self.fundtimer:
@@ -283,6 +275,14 @@ class Updater(QProcess):
                 self.add_fund_to_update(fund[0])
         except (TypeError, requests.exceptions.RequestException):
             pass
+
+    def startUpdateTimer(self):
+        self.fundtimer = self.startTimer(FUNDS_UPDATE_TIMER * 1000)
+        self.markettimer = self.startTimer(MARKETS_UPDATE_TIMER * 1000)
+
+    def stopTimer(self):
+        self.killTimer(self.fundtimer)
+        self.killTimer(self.markettimer)
 
     @staticmethod
     def isTradingTime():
