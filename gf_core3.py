@@ -16,7 +16,7 @@ import asyncio
 import aiohttp
 import requests
 
-FUNDS_UPDATE_TIMER = 30
+FUNDS_UPDATE_TIMER = 20
 MARKETS_UPDATE_TIMER = 5
 
 
@@ -59,6 +59,9 @@ class StockInFund:
                     self.PB = float(data[43])
         except asyncio.TimeoutError:
             pass
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 
 class TheFund:
@@ -106,7 +109,9 @@ class TheFund:
         self.perform = [x.text[:-1].strip() for x in data.find('li', {'id': 'increaseAmount_stage'}).findAll('tr')[1].findAll('td')][1:]
         top10_stocks = re.findall(r'<a href="http://quote.eastmoney.com/(\w{2})(\d{6})\.html" title=".*?">.*?</a>.+?<td class="alignRight bold">(.*?)%</td>', raw_data)
         for each in top10_stocks:
-            self.stocks.append(StockInFund(each[0], each[1], float(each[2])))
+            stock = StockInFund(each[0], each[1], float(each[2]))
+            if stock not in self.stocks:
+                self.stocks.append(stock)
 
     async def initialize(self):
         async with aiohttp.ClientSession() as session:
@@ -169,7 +174,7 @@ class TheFund:
                     self.fresh = True if datetime.now().strftime('%Y-%m-%d') == date else False
                     self.current_value = val
                     self.latest_change = changed
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, aiohttp.errors.ServerDisconnectedError):
             pass
 
     async def update_ontime(self):
@@ -179,7 +184,7 @@ class TheFund:
                 async with session.get(url_ptn.format(self.id), timeout=6) as resp:
                     raw = await resp.text()
                     self.estimate = re.search(r'"gszzl":"(.*?)"', raw).group(1)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, aiohttp.errors.ServerDisconnectedError):
             pass
 
     def __eq__(self, other):
@@ -225,7 +230,7 @@ class Updater(QProcess):
 
     def funds_updater(self):
         futures = []
-
+        start = datetime.now().timestamp()
         for each in self.funds:
             # 交易时段判断
             if each.initialized:
@@ -247,6 +252,7 @@ class Updater(QProcess):
             if each.initialized:
                 pak.append(each)
         self.fund_sender.emit(pak)
+        print('[{}]Fund update time cost: {}'.format(datetime.now().ctime(), datetime.now().timestamp() - start))
 
     def markets_updater(self):
         if not self.isTradingTime() and self.markets is not '':

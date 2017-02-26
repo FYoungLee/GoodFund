@@ -133,6 +133,7 @@ class GF_MainWindow(QWidget):
             self.syn_btn.setText('更新中...')
 
     def placeFunds(self, funds):
+        start = datetime.now().timestamp()
         self.start_btn.setEnabled(True)
         self.load_favor_btn.setEnabled(True)
         self.display_table.setSortingEnabled(False)
@@ -147,6 +148,7 @@ class GF_MainWindow(QWidget):
                 self.placeNewFund(starting_row - 1, fund)
         self._resizeTable()
         self.display_table.setSortingEnabled(True)
+        print('[{}]Placing item time cost: {}'.format(datetime.now().ctime(), datetime.now().timestamp() - start))
 
     def isFundInTable(self, fund):
         rows = self.display_table.rowCount()
@@ -170,6 +172,12 @@ class GF_MainWindow(QWidget):
         self.display_table.item(row, 4).setForeground(color)
         self.display_table.item(row, 16).setText(str(round(fund.avg_PE, 2)))
         self.display_table.item(row, 17).setText(str(round(fund.avg_PB, 2)))
+        stocks_tooltip = ''
+        for stock in fund.stocks:
+            stocks_tooltip += '({})[{}] {} 价格:{}\t市盈率:{}\t市净率:{}\t量比:{}\n'\
+                .format(stock.ratio, stock.id, stock.name, stock.price, stock.PE, stock.PB, stock.QR)
+        self.display_table.item(row, 16).setToolTip(stocks_tooltip)
+        self.display_table.item(row, 17).setToolTip(stocks_tooltip)
 
     def placeNewFund(self, row, fund):
         # 单条基金信息, 按column位置铺
