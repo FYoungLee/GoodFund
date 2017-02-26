@@ -16,8 +16,9 @@ import asyncio
 import aiohttp
 import requests
 
-FUNDS_UPDATE_TIMER = 20
+FUNDS_UPDATE_TIMER = 30
 MARKETS_UPDATE_TIMER = 5
+TIMEOUT = 5
 
 
 class Tasks:
@@ -128,7 +129,7 @@ class TheFund:
     async def get_baseinfo(self, session):
         url_ptn = 'http://fund.eastmoney.com/{}.html'
         try:
-            async with session.get(url_ptn.format(self.id), timeout=6) as response:
+            async with session.get(url_ptn.format(self.id), timeout=TIMEOUT) as response:
                 raw_data = await response.text()
                 self.update_baseinfo(raw_data)
         except asyncio.TimeoutError:
@@ -151,7 +152,7 @@ class TheFund:
             return retDict
 
         try:
-            async with session.get(url_ptn.format(self.id), timeout=6) as response:
+            async with session.get(url_ptn.format(self.id), timeout=TIMEOUT) as response:
                 raw_data = await response.read()
                 data = beautiful_pages(raw_data.decode(errors='ignore'))
                 self.score = data['Data_performanceEvaluation']['avr'] \
@@ -167,7 +168,7 @@ class TheFund:
         url_ptn = 'http://fund.eastmoney.com/{}.html'
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url_ptn.format(self.id), timeout=6) as resp:
+                async with session.get(url_ptn.format(self.id), timeout=TIMEOUT) as resp:
                     raw_data = await resp.text()
                     re_ptn = r'<dl class="dataItem02">.+?<p>.+?(\d{4}-\d{2}-\d{2}).*?dataNums.*?(\d+\.\d+).*?([+|-]?\d+\.\d+)%'
                     date, val, changed = re.search(re_ptn, raw_data).groups()
@@ -181,7 +182,7 @@ class TheFund:
         url_ptn = 'http://fundgz.1234567.com.cn/js/{}.js'
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url_ptn.format(self.id), timeout=6) as resp:
+                async with session.get(url_ptn.format(self.id), timeout=TIMEOUT) as resp:
                     raw = await resp.text()
                     self.estimate = re.search(r'"gszzl":"(.*?)"', raw).group(1)
         except (asyncio.TimeoutError, aiohttp.errors.ServerDisconnectedError):
@@ -257,8 +258,9 @@ class Updater(QProcess):
     def markets_updater(self):
         if not self.isTradingTime() and self.markets is not '':
             return
-        raw_data = requests.get('http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401')
         try:
+            raw_data = requests.get('http://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_sz399905,s_sz399300,s_sz399401',
+                                    timeout=TIMEOUT)
             raws = [x.split(',')[:4] for x in re.findall(r'"(.*)"', raw_data.text)]
             self.markets = ''
             for each in raws:
@@ -270,16 +272,16 @@ class Updater(QProcess):
                 each[2] = '[{}]'.format(each[2])
                 self.markets += '{}: <font color="{}">{}%</font>{}'.format(each[0], color, '&nbsp;'.join(each[1:]), '&nbsp;' * 4)
                 self.market_sender.emit(self.markets)
-        except TypeError:
-            return
+        except (TypeError, requests.exceptions.RequestException):
+            pass
 
     def get_filtered_list(self, kw, rank):
-        raw_data = requests.get('http://fund.eastmoney.com/data/rankhandler.aspx?op=ph&pn=10000')
         try:
+            raw_data = requests.get('http://fund.eastmoney.com/data/rankhandler.aspx?op=ph&pn=10000', timeout=TIMEOUT)
             rst = FundsFilter(kw, rank, raw_data.text).filter()
             for fund in rst:
                 self.add_fund_to_update(fund[0])
-        except TypeError:
+        except (TypeError, requests.exceptions.RequestException):
             pass
 
     @staticmethod
