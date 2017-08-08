@@ -2,32 +2,31 @@ from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QComboBox, QSlide
     QTableWidgetItem, QPushButton, QHeaderView, QLineEdit
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.Qt import QDesktopServices
-import gf_core3
+import gf_core4
 import json, re
 from datetime import datetime
 
 
 class GF_MainWindow(QWidget):
+    with open('Stock_Finatial_Reports.json') as f:
+        F_STOCKS_DB = json.loads(f.read())
+    FUNDS_DETAIL = gf_core4.scratch_all_funds()
+
     def __init__(self, parent=None):
         super(GF_MainWindow, self).__init__(parent)
-        self.setWindowTitle('搞个好基基 作者：肥羊')
-        self.setMinimumSize(1440, 720)
+        self.setWindowTitle('搞个好基基 by 羊习习')
+        # self.setMinimumSize(1440, 480)
         # 当前显示基金池
-        self.favorites = []
+        self.Funds_Pool = {}
+        self.Favorite_Funds = []
 
         # 开始GUI布局
         mlayout = QVBoxLayout()
         optionlayout = QHBoxLayout()
         optionlayout.addWidget(QLabel('历史排名'))
         self.history_combox = QComboBox()
-        self.history_combox.addItem('三年涨幅')
-        self.history_combox.addItem('两年涨幅')
-        self.history_combox.addItem('一年涨幅')
-        self.history_combox.addItem('今年涨幅')
-        self.history_combox.addItem('半年涨幅')
-        self.history_combox.addItem('季涨幅')
-        self.history_combox.addItem('月涨幅')
-        self.history_combox.addItem('周涨幅')
+        for each in ('一周', '一月', '季度', '半年', '一年', '两年', '三年', '五年'):
+            self.history_combox.addItem(each)
         optionlayout.addWidget(self.history_combox)
         optionlayout.addWidget(QLabel('排名比率'))
         self.rank_slider = QSlider(Qt.Horizontal)
@@ -43,13 +42,21 @@ class GF_MainWindow(QWidget):
         self.start_btn.setFixedWidth(100)
         self.start_btn.clicked.connect(self.startClicked)
         optionlayout.addWidget(self.start_btn)
+        self.manager_filter_btn = QPushButton('按经理筛选')
+        self.manager_filter_btn.setFixedWidth(100)
+        self.manager_filter_btn.clicked.connect(self.manager_filter)
+        optionlayout.addWidget(self.manager_filter_btn)
         optionlayout.addStretch(1)
 
         midlayout = QHBoxLayout()
-        self.syn_btn = QPushButton('更新中...')
-        self.syn_btn.setFixedWidth(100)
-        self.syn_btn.clicked.connect(self.synClicked)
-        midlayout.addWidget(self.syn_btn)
+        # self.syn_btn = QPushButton('更新中...')
+        # self.syn_btn.setFixedWidth(100)
+        # self.syn_btn.clicked.connect(self.synClicked)
+        # midlayout.addWidget(self.syn_btn)
+        self.refresh_funds_details_btn = QPushButton('刷新净值')
+        self.refresh_funds_details_btn.setFixedWidth(100)
+        self.refresh_funds_details_btn.clicked.connect(self.refresh_funds_details)
+        midlayout.addWidget(self.refresh_funds_details_btn)
         self.load_favor_btn = QPushButton('加载收藏')
         self.load_favor_btn.setFixedWidth(100)
         self.load_favor_btn.clicked.connect(self.loadFavor)
@@ -84,10 +91,10 @@ class GF_MainWindow(QWidget):
         self.display_table.rightClicked.connect(self.tableItemClicked)
         self.display_table.setSelectionMode(QTableWidget.SingleSelection)
         self.display_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.display_table.setColumnCount(19)
-        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '累计', '估算',
-                                                      '日涨', '周涨', '月涨', '季涨', '半年', '今年', '一年',
-                                                      '两年', '三年', '规模', '市盈', '市净', '收藏'])
+        self.display_table.setColumnCount(17)
+        self.display_table.setHorizontalHeaderLabels(['基金名称', '评分', '经理', '净值', '估算',
+                                                      '日涨', '周涨', '月涨', '季涨', '半年', '一年',
+                                                      '两年', '三年', '五年', '规模', '市盈', '收藏'])
 
         mlayout.addLayout(optionlayout)
         mlayout.addLayout(midlayout)
@@ -97,26 +104,64 @@ class GF_MainWindow(QWidget):
         mlayout.addWidget(self.marketsDisplay)
 
         self.setLayout(mlayout)
-        # 载入收藏基金
-        self.updater = gf_core3.Updater()
-        self.updater.fund_sender.connect(self.placeFunds)
-        self.updater.market_sender.connect(lambda x: self.marketsDisplay.setText(x))
-        self.updater.start()
+
+        self.the_markets_updater = gf_core4.Market_Updater()
+        self.fund_builder = gf_core4.FundsBuilder(self.FUNDS_DETAIL, self.F_STOCKS_DB)
+        self.fund_builder.funds_obj_signals.connect(self.placeFunds)
+        self.fund_builder.progress_signals.connect(lambda x: self.info_display.setText(x))
+        self.fund_builder.start()
+        self.the_markets_timer = self.startTimer(10000)
+        # # 载入收藏基金
+        # self.updater = gf_core4.Updater()
+        # self.updater.fund_sender.connect(self.placeFunds)
+        # self.updater.market_sender.connect(lambda x: self.marketsDisplay.setText(x))
+        # self.updater.start()
+
+    def timerEvent(self, QTimerEvent):
+        if QTimerEvent.timerId() == self.the_markets_timer:
+            text = self.the_markets_updater.cook_the_markets()
+            self.marketsDisplay.setText(text)
+            if self.Funds_Pool:
+                self.updateFunds()
+
+    def refresh_funds_details(self):
+        self.FUNDS_DETAIL = gf_core4.scratch_all_funds()
+        self.start_btn.setEnabled(True)
+        self.load_favor_btn.setEnabled(True)
+        self.display_table.setSortingEnabled(False)
+        self.display_table.setRowCount(len(self.Funds_Pool))
+        for fund_id in self.Funds_Pool:
+            row = self.isFundInTable(fund_id)
+            if row == -1:
+                continue
+            fund = self.Funds_Pool[fund_id]
+
+            cur_val = MyTableItem('{} [{}]'.format(fund.details['DWJZ'], fund.details['LJJZ']))
+            self.display_table.setItem(row, 3, cur_val)
+
+            is_new = 'NEW' if fund.details['FSRQ'] in datetime.now().isoformat() else ''
+            latest_chg = MyTableItem('{}% {}'.format(fund.details['RZDF'], is_new))
+            color = self.setValueColor(float(fund.details['RZDF']))
+            latest_chg.setForeground(color)
+            cur_val.setForeground(color)
+            self.display_table.setItem(row, 5, latest_chg)
+
+        self._resizeTable()
+        self.display_table.setSortingEnabled(True)
 
     def loadFavor(self):
         self.load_favor_btn.setEnabled(False)
+        self.killTimer(self.the_markets_timer)
         # 从json文档中加载已经保存的基金代码
         try:
-            with open('favorite.json', 'r') as f:
+            with open('Favorite_Funds.json', 'r') as f:
                 favors = json.loads(f.read())
-                for each in favors:
-                    if each not in self.favorites:
-                        self.favorites.append(each)
+                self.Favorite_Funds = favors
         except FileExistsError:
-            with open('favorite.json', 'w'):
-                return
-        for fid in self.favorites:
-            self.updater.add_fund_to_update(fid)
+            return
+        favors = [x for x in favors if x not in self.Funds_Pool.keys()]
+        self.fund_builder.funds.extend(favors)
+        self.the_markets_timer = self.startTimer(10000)
 
     def displaySelectedFund(self, fund_item):
         # TODO display fund information locally
@@ -124,167 +169,208 @@ class GF_MainWindow(QWidget):
 
     def startClicked(self):
         self.start_btn.setEnabled(False)
-        self.updater.get_filtered_list(self.history_combox.currentText(), self.rank_slider.value())
+        steps = ('SYL_Z', 'SYL_Y', 'SYL_3Y', 'SYL_6Y', 'SYL_1N', 'SYL_2N', 'SYL_3N', 'SYL_5N')
+        step = self.history_combox.currentIndex()
+        percent = self.rank_slider.value()
+        ret = [self.FUNDS_DETAIL[x] for x in self.FUNDS_DETAIL]
+        for _n, _s in enumerate(steps):
+            if _n >= step and ret:
+                break
+            ret.sort(key=lambda x: x[_s], reverse=True)
+            ret = ret[:int(percent / 100 * len(ret))]
+        self.fund_builder.funds.extend([x['FCODE'] for x in ret if x['BUY']])
 
-    def synClicked(self):
-        if '更新中' in self.syn_btn.text():
-            self.syn_btn.setText('更新停止')
-            self.updater.stopTimer()
-        else:
-            self.syn_btn.setText('更新中...')
-            self.updater.startUpdateTimer()
+    def manager_filter(self):
+        m_filter = gf_core4.ManFilter()
+        m_filter.funds_signal.connect(lambda x: self.fund_builder.funds.extend(x))
+        m_filter.display_managers_signal.connect(lambda x: self.info_display.setText(x))
+        m_filter.start()
 
-    def placeFunds(self, funds):
-        start = datetime.now().timestamp()
+    # def synClicked(self):
+    #     if '更新中' in self.syn_btn.text():
+    #         self.syn_btn.setText('更新停止')
+    #         self.updater.stopTimer()
+    #     else:
+    #         self.syn_btn.setText('更新中...')
+    #         self.updater.startUpdateTimer()
+
+    def placeFunds(self, funds_obj, stocks_in_funds):
+        self.Funds_Pool.update(funds_obj)
+        self.the_markets_updater.extend_stocks(stocks_in_funds)
+        self.display_table.setSortingEnabled(False)
+        self.display_table.setRowCount(len(self.Funds_Pool))
+        # starting_row = self.display_table.rowCount()
+        for row, fund_id in enumerate(self.Funds_Pool):
+            # 单条基金信息, 按column位置铺
+            fund = self.Funds_Pool[fund_id]
+            name = QTableWidgetItem('[{}] {}'.format(fund_id, fund.details['SHORTNAME']))
+            name.setToolTip(fund.style())
+            name.setData(1000, fund_id)
+            self.display_table.setItem(row, 0, name)
+
+            score = MyTableItem()
+            score.setText(str(fund.details['Score']))
+            score.setTextAlignment(Qt.AlignCenter)
+            self.display_table.setItem(row, 1, score)
+
+            manager = MyTableItem()
+            man_text_tooltip = ''
+            best = fund.details['Managers'][0]
+            for man in fund.details['Managers']:
+                man_text_tooltip += '[{}]{} {}\n'.format(man['id'], man['name'], man['power']['data'][1])
+                if man['power']['data'][1] and best['power']['data'][1]:
+                    if man['power']['data'][1] > best['power']['data'][1]:
+                        best = man
+                elif best['power']['data'][1] is None:
+                    best = man
+            man_text_display = '{} {}'.format(best['name'], best['power']['data'][1]) \
+                if best['power']['data'][1] else '{} 0.0'.format(best['name'])
+            if len(fund.details['Managers']) > 1:
+                man_text_display += ' +'
+            manager.setText(man_text_display)
+            manager.setToolTip(man_text_tooltip[:-1])
+            # manager.setData(1000, fund['Managers'])
+            self.display_table.setItem(row, 2, manager)
+
+            cur_val = MyTableItem('{} [{}]'.format(fund.details['DWJZ'], fund.details['LJJZ']))
+            self.display_table.setItem(row, 3, cur_val)
+
+            es = round(fund.estimate(self.the_markets_updater.current_market), 2)
+            est_chg = MyTableItem('{}%'.format(es))
+            est_chg.setForeground(self.setValueColor(es))
+            est_chg.setTextAlignment(Qt.AlignCenter)
+            self.display_table.setItem(row, 4, est_chg)
+
+            is_new = 'NEW' if fund.details['FSRQ'] in datetime.now().isoformat() else ''
+            latest_chg = MyTableItem('{}% {}'.format(fund.details['RZDF'], is_new))
+            color = self.setValueColor(float(fund.details['RZDF']))
+            latest_chg.setForeground(color)
+            cur_val.setForeground(color)
+            self.display_table.setItem(row, 5, latest_chg)
+
+            for _col, _each in enumerate(('SYL_Z', 'SYL_Y', 'SYL_3Y', 'SYL_6Y', 'SYL_1N', 'SYL_2N', 'SYL_3N', 'SYL_5N')):
+                if fund.details[_each]:
+                    color = self.setValueColor(float(fund.details[_each]))
+                    if not color:
+                        continue
+                    pf = MyTableItem('{}%'.format(round(float(fund.details[_each]), 2)))
+                    pf.setForeground(color)
+                    pf.setTextAlignment(Qt.AlignCenter)
+                    self.display_table.setItem(row, _col + 6, pf)
+
+            fund_scale = MyTableItem('{}亿'.format(fund.details['Scale']))
+            fund_scale.setTextAlignment(Qt.AlignCenter)
+            self.display_table.setItem(row, 14, fund_scale)
+
+            avg, tips = fund.pe(self.the_markets_updater.current_market)
+            fund_pe = MyTableItem(str(avg))
+            fund_pe.setTextAlignment(Qt.AlignCenter)
+            fund_pe.setToolTip(tips)
+            self.display_table.setItem(row, 15, fund_pe)
+
+            # fund_pb = MyTableItem(str(fund_id.avg_PB))
+            # fund_pb.setTextAlignment(Qt.AlignCenter)
+            # self.display_table.setItem(row, 17, fund_pb)
+
+            is_favored = '收藏' if fund.details['FCODE'] not in self.Favorite_Funds else '已收藏'
+            favored = QTableWidgetItem(is_favored)
+            if is_favored == '已收藏':
+                name.setForeground(Qt.darkRed)
+                favored.setForeground(Qt.lightGray)
+            self.display_table.setItem(row, 16, favored)
+        self._resizeTable()
+        self.display_table.setSortingEnabled(True)
+        self.start_btn.setEnabled(True)
+        self.load_favor_btn.setEnabled(True)
+
+    def updateFunds(self):
         self.start_btn.setEnabled(True)
         self.load_favor_btn.setEnabled(True)
         self.display_table.setSortingEnabled(False)
-        starting_row = self.display_table.rowCount()
-        for fund in funds:
-            row = self.isFundInTable(fund)
-            if row != -1:
-                self.updateFundItem(row, fund)
-            else:
-                starting_row += 1
-                self.display_table.setRowCount(starting_row)
-                self.placeNewFund(starting_row - 1, fund)
+        self.display_table.setRowCount(len(self.Funds_Pool))
+        for fund_id in self.Funds_Pool:
+            row = self.isFundInTable(fund_id)
+            if row == -1:
+                continue
+            fund = self.Funds_Pool[fund_id]
+
+            es = round(fund.estimate(self.the_markets_updater.current_market), 2)
+            est_chg = MyTableItem('{}%'.format(es))
+            est_chg.setForeground(self.setValueColor(es))
+            est_chg.setTextAlignment(Qt.AlignCenter)
+            self.display_table.setItem(row, 4, est_chg)
+
+            avg, tips = fund.pe(self.the_markets_updater.current_market)
+            fund_pe = MyTableItem(str(avg))
+            fund_pe.setTextAlignment(Qt.AlignCenter)
+            fund_pe.setToolTip(tips)
+            self.display_table.setItem(row, 15, fund_pe)
+
         self._resizeTable()
         self.display_table.setSortingEnabled(True)
-        print('[{}]Placing item time cost: {}'.format(datetime.now().ctime(), datetime.now().timestamp() - start))
 
-    def isFundInTable(self, fund):
+    def isFundInTable(self, fund_id):
         rows = self.display_table.rowCount()
         for row in range(rows):
-            if fund.id == self.display_table.item(row, 0).toolTip():
+            if fund_id == self.display_table.item(row, 0).data(1000):
                 return row
         return -1
+    #
+    # def updateFundItem(self, row, fund):
+    #     fund.calculate_averages()
+    #     self.display_table.item(row, 5).setText(fund.estimate)
+    #     color = self.setValueColor(fund.estimate)
+    #     self.display_table.item(row, 5).setForeground(color)
+    #     is_new = 'NEW' if fund.fresh else ''
+    #     self.display_table.item(row, 6).setText(fund.latest_change + '%' + is_new)
+    #     color = self.setValueColor(fund.latest_change)
+    #     self.display_table.item(row, 6).setForeground(color)
+    #     self.display_table.item(row, 3).setText(fund.current_value)
+    #     self.display_table.item(row, 3).setForeground(color)
+    #     self.display_table.item(row, 4).setText(fund.total_value)
+    #     self.display_table.item(row, 4).setForeground(color)
+    #     self.display_table.item(row, 16).setText(str(round(fund.avg_PE, 2)))
+    #     self.display_table.item(row, 17).setText(str(round(fund.avg_PB, 2)))
+    #     stocks_tooltip = ''
+    #     for stock in fund.stocks:
+    #         stocks_tooltip += '({}) [{}] {} 价格:{}\t市盈率:{:.1f}\t市净率:{:.1f}\t量比:{}\n'\
+    #             .format(stock.ratio, stock.id, stock.name, stock.price, stock.PE, stock.PB, stock.QR)
+    #     self.display_table.item(row, 16).setToolTip(stocks_tooltip)
+    #     self.display_table.item(row, 17).setToolTip(stocks_tooltip)
 
-    def updateFundItem(self, row, fund):
-        fund.calculate_averages()
-        self.display_table.item(row, 5).setText(fund.estimate)
-        color = self.setValueColor(fund.estimate)
-        self.display_table.item(row, 5).setForeground(color)
-        is_new = 'NEW' if fund.fresh else ''
-        self.display_table.item(row, 6).setText(fund.latest_change + '%' + is_new)
-        color = self.setValueColor(fund.latest_change)
-        self.display_table.item(row, 6).setForeground(color)
-        self.display_table.item(row, 3).setText(fund.current_value)
-        self.display_table.item(row, 3).setForeground(color)
-        self.display_table.item(row, 4).setText(fund.total_value)
-        self.display_table.item(row, 4).setForeground(color)
-        self.display_table.item(row, 16).setText(str(round(fund.avg_PE, 2)))
-        self.display_table.item(row, 17).setText(str(round(fund.avg_PB, 2)))
-        stocks_tooltip = ''
-        for stock in fund.stocks:
-            stocks_tooltip += '({})[{}] {} 价格:{}\t市盈率:{}\t市净率:{}\t量比:{}\n'\
-                .format(stock.ratio, stock.id, stock.name, stock.price, stock.PE, stock.PB, stock.QR)
-        self.display_table.item(row, 16).setToolTip(stocks_tooltip)
-        self.display_table.item(row, 17).setToolTip(stocks_tooltip)
-
-    def placeNewFund(self, row, fund):
-        # 单条基金信息, 按column位置铺
-        name = QTableWidgetItem('{}  [{}]'.format(fund.name, fund.id))
-        name.setTextAlignment(Qt.AlignCenter)
-        name.setToolTip(fund.id)
-        name.setData(1000, fund.name)
-        self.display_table.setItem(row, 0, name)
-
-        score = MyTableItem()
-        score.setText(fund.score)
-        score.setTextAlignment(Qt.AlignCenter)
-        self.display_table.setItem(row, 1, score)
-
-        manager = QTableWidgetItem()
-        man_text_tooltip = ''
-        best = None
-        for mid in fund.managers:
-            man_text_tooltip += '[{}]{} {}\n'.format(mid, fund.managers[mid]['name'], fund.managers[mid]['score'])
-            if best is None or fund.managers[mid]['score'] > best['score']:
-                best = fund.managers[mid]
-        man_text_display = '{} {}'.format(best['name'], best['score']) if best is not None else ''
-        if len(fund.managers) > 1:
-            man_text_display += ' ...'
-        manager.setText(man_text_display)
-        manager.setToolTip(man_text_tooltip[:-1])
-        manager.setTextAlignment(Qt.AlignCenter)
-        manager.setData(1000, fund.managers)
-        self.display_table.setItem(row, 2, manager)
-
-        cur_val = MyTableItem(fund.current_value)
-        self.display_table.setItem(row, 3, cur_val)
-
-        tot_val = MyTableItem(fund.total_value)
-        self.display_table.setItem(row, 4, tot_val)
-
-        est_chg = MyTableItem(fund.estimate + '%')
-        est_chg.setForeground(self.setValueColor(fund.estimate))
-        self.display_table.setItem(row, 5, est_chg)
-
-        is_new = 'NEW' if fund.fresh else ''
-        latest_chg = MyTableItem(fund.latest_change + '%' + is_new)
-        color = self.setValueColor(fund.latest_change)
-        latest_chg.setForeground(color)
-        cur_val.setForeground(color)
-        tot_val.setForeground(color)
-        self.display_table.setItem(row, 6, latest_chg)
-
-        for _col, _each in enumerate(fund.perform):
-            color = self.setValueColor(_each)
-            if color == Qt.black:
-                continue
-            pf = MyTableItem(_each + ' %')
-            pf.setForeground(self.setValueColor(_each))
-            pf.setTextAlignment(Qt.AlignCenter)
-            self.display_table.setItem(row, _col + 7, pf)
-
-        fund_scale = MyTableItem(str(fund.scales) + '亿')
-        fund_scale.setTextAlignment(Qt.AlignCenter)
-        self.display_table.setItem(row, 15, fund_scale)
-
-        fund_pe = MyTableItem(str(fund.avg_PE))
-        fund_pe.setTextAlignment(Qt.AlignCenter)
-        self.display_table.setItem(row, 16, fund_pe)
-
-        fund_pb = MyTableItem(str(fund.avg_PB))
-        fund_pb.setTextAlignment(Qt.AlignCenter)
-        self.display_table.setItem(row, 17, fund_pb)
-
-        is_favored = '收藏' if fund.id not in self.favorites else '已收藏'
-        favored = QTableWidgetItem(is_favored)
-        if is_favored == '已收藏':
-            name.setForeground(Qt.darkRed)
-            favored.setForeground(Qt.lightGray)
-        self.display_table.setItem(row, 18, favored)
+    # def placeNewFund(self, row, fund):
+    #     pass
 
     def tableItemClicked(self, _item):
         self.display_table.setSortingEnabled(False)
         # 当表格被点击时
         if isinstance(_item, int):
+            # 接收到右键自定义信号，删除
             row = _item
-            del_id = self.display_table.item(row, 0).toolTip()
-            if '已收藏' in self.display_table.item(row, 15).text():
-                self.favorites.remove(del_id)
+            del_id = self.display_table.item(row, 0).data(1000)
+            if '已收藏' in self.display_table.item(row, 16).text():
+                self.Favorite_Funds.remove(del_id)
+            self.Funds_Pool.pop(del_id)
             self.display_table.removeRow(row)
-            self.updater.remove(del_id)
         elif isinstance(_item, QTableWidgetItem):
             if _item.column() == 0:
                 # 打开基金的详细信息链接 (本地打开, 开发中...)
-                QDesktopServices().openUrl(QUrl('http://fund.eastmoney.com/{}.html'.format(_item.toolTip())))
-            if _item.column() == 18:
+                QDesktopServices().openUrl(QUrl('http://fund.eastmoney.com/{}.html'.format(_item.data(1000))))
+            if _item.column() == 16:
                 # 收藏功能
                 if _item.text() == '已收藏':
                     _item_0 = self.display_table.item(_item.row(), 0)
-                    self.favorites.remove(_item_0.toolTip())
-                    with open('favorite.json', 'w') as f:
-                        f.write(json.dumps(self.favorites))
+                    self.Favorite_Funds.remove(_item_0.data(1000))
+                    with open('Favorite_Funds.json', 'w') as f:
+                        f.write(json.dumps(self.Favorite_Funds))
                     _item_0.setForeground(Qt.black)
                     _item.setText('收藏')
                     _item.setForeground(Qt.black)
                 elif _item.text() == '收藏':
                     _item_0 = self.display_table.item(_item.row(), 0)
-                    self.favorites.append(_item_0.toolTip())
-                    with open('favorite.json', 'w') as f:
-                        f.write(json.dumps(self.favorites))
+                    self.Favorite_Funds.append(_item_0.data(1000))
+                    with open('Favorite_Funds.json', 'w') as f:
+                        f.write(json.dumps(self.Favorite_Funds))
                     _item_0.setForeground(Qt.darkRed)
                     _item.setText('已收藏')
                     _item.setForeground(Qt.gray)
@@ -297,24 +383,24 @@ class GF_MainWindow(QWidget):
             # 判断是否为有效6位代码
             self.info_display.setText('[{}] 基金代码不正确, 请重新输入.'.format(datetime.now().strftime('%H%M%S')))
             return
-        if fid in self.favorites:
+        if fid in self.Favorite_Funds:
             # 判断显示列表中有无这个基金
             self.info_display.setText('[{}] 基金已经在列表中'.format(datetime.now().strftime('%H%M%S')))
             return
-        self.updater.add_fund_to_update(fid)
+        self.fund_builder.funds.append(fid)
 
     @staticmethod
     def setValueColor(val):
         # 给数据上色, 红或者绿
         try:
-            if float(val) > 0:
+            if val > 0:
                 return Qt.red
-            elif float(val) < 0:
+            elif val < 0:
                 return Qt.darkGreen
             else:
                 return Qt.darkBlue
-        except ValueError:
-            return Qt.black
+        except (TypeError, ValueError):
+            return
 
     def _resizeTable(self):
         for n in range(1, self.display_table.columnCount()):
@@ -322,7 +408,11 @@ class GF_MainWindow(QWidget):
 
     def clearAll(self):
         self.display_table.clear()
-        self.updater.funds.clear()
+        self.Funds_Pool.clear()
+        self.the_markets_updater.stocks_id.clear()
+        self.the_markets_updater.current_market.clear()
+        self.display_table.setRowCount(0)
+        self.display_table.setColumnCount(0)
 
 
 class MyTable(QTableWidget):
