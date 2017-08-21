@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QComboBox, QSlider, QLabel, QTableWidget, \
-    QTableWidgetItem, QPushButton, QHeaderView, QLineEdit
+    QTableWidgetItem, QPushButton, QHeaderView, QLineEdit, QMessageBox
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal
 from PyQt5.Qt import QDesktopServices
 import gf_core4
@@ -10,6 +10,8 @@ from datetime import datetime
 class GF_MainWindow(QWidget):
     with open('Stock_Finatial_Reports.json') as f:
         F_STOCKS_DB = json.loads(f.read())
+    with open('Managers.json') as f:
+        Managers = json.loads(f.read())
     FUNDS_DETAIL = gf_core4.scratch_all_funds()
 
     def __init__(self, parent=None):
@@ -216,8 +218,21 @@ class GF_MainWindow(QWidget):
             manager = MyTableItem()
             man_text_tooltip = ''
             best = fund.details['Managers'][0]
+            def cook_manager(mid):
+                ret = ''
+                ret += '[{}] {} ({})'\
+                    .format(mid, self.Managers[mid]['Datas']['MGRNAME'], self.Managers[mid]['Datas']['JJGS'])
+                ret += '\n\t管理规模: {}亿\n\t经验: {}天'\
+                    .format(round(float(self.Managers[mid]['Datas']['NETNAV'])/100000000, 2),
+                            self.Managers[mid]['Datas']['TOTALDAYS'])
+                ret += '\n\t最大回报: {:.2%}\n\t最大回撤: {:.2%}\n\t平均年化: {}%\n'\
+                    .format(float(self.Managers[mid]['Datas']['FMAXEARN1']),
+                            float(self.Managers[mid]['Datas']['FMAXRETRA1']),
+                            self.Managers[mid]['Datas']['YIELDSE'])
+                ret += '\n'
+                return ret
             for man in fund.details['Managers']:
-                man_text_tooltip += '[{}]{} {}\n'.format(man['id'], man['name'], man['power']['data'][1])
+                man_text_tooltip += cook_manager(man['id'])
                 if man['power']['data'][1] and best['power']['data'][1]:
                     if man['power']['data'][1] > best['power']['data'][1]:
                         best = man
@@ -356,7 +371,9 @@ class GF_MainWindow(QWidget):
             if _item.column() == 0:
                 # 打开基金的详细信息链接 (本地打开, 开发中...)
                 QDesktopServices().openUrl(QUrl('http://fund.eastmoney.com/{}.html'.format(_item.data(1000))))
-            if _item.column() == 16:
+            elif _item.column() == 2:
+                QMessageBox().information(self, '经理信息', _item.toolTip(), QMessageBox.Ok)
+            elif _item.column() == 16:
                 # 收藏功能
                 if _item.text() == '已收藏':
                     _item_0 = self.display_table.item(_item.row(), 0)

@@ -18,6 +18,7 @@ from PyQt5.QtCore import QProcess, QThread, pyqtSignal
 # wap版基金大全 "https://fundmobapi.eastmoney.com/FundMApi/FundRankNewList.ashx?pagesize=10000&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0"
 #   FUNDTYPE = {001: 指数, 002: 混合, 003: 债券， 006: 保本, 007: QDII, 008: 定开债, 202: 分级债券, 205: 货币}
 # 基金经理 "http://fund.eastmoney.com/Data/FundDataPortfolio_Interface.aspx?dt=14&pn=5000"
+# 经理详情 "https://fundmobapi.eastmoney.com/FundMApi/FundMangerBase.ashx?deviceid=fundmanager2016&version=4.3.0&product=EFund&plat=Iphone&MGRID=30325983"
 
 # url = 'http://fund.eastmoney.com/f10/FundArchivesDatas.aspx?type=jjcc&code={}&topline=500'
 
@@ -546,6 +547,7 @@ class ManFilter(QProcess):
         men.sort(key=lambda x: x['score'], reverse=True)
         return men
 
+
 # def scratch_managers():
 #     url = 'http://fund.eastmoney.com/Data/FundDataPortfolio_Interface.aspx?dt=14&pn=5000'
 #     rawpage = requests.get(url)
@@ -599,6 +601,126 @@ class ManFilter(QProcess):
 #
 #     return men
 
+def download_finatial_reports(scodes, timeout=1, limits=10):
+    # url = 'http://datainterface.eastmoney.com/EM_DataCenter/JS.aspx?type=SR&sty=YJBB&code={}'
+    # try:
+    #     page = requests.get(url.format(scode))
+    #     if page.ok:
+    #         jsontext = page.text[1:-1]
+    #         if 'stats:false' in jsontext:
+    #             return
+    #         data = json.loads(jsontext)
+    #         data = [x.split(',') for x in data]
+    #         _ret = {}
+    #         for each in data:
+    #             yy, mm, dd = each[-2].split('-')
+    #             date_ts = datetime(int(yy), int(mm), int(dd)).timestamp()
+    #             _ret[date_ts] = float(each[2])
+    #         return _ret
+    #     else:
+    #         raise requests.exceptions.RequestException
+    # except requests.exceptions.RequestException:
+    #     time.sleep(timeout)
+    #     download_finatial_reports(scode, timeout=timeout+1)
+
+    url = 'http://datainterface.eastmoney.com/EM_DataCenter/JS.aspx?type=SR&sty=YJBB&code={}'
+    ret = {}
+    done = [0]
+
+    async def fetch(session, s_url, scode, timeout=timeout):
+        try:
+            async with session.get(s_url) as resp:
+                pbytes = await resp.read()
+                page_content = pbytes.decode()
+                if 'stats:false' not in page_content:
+                    data = json.loads(page_content[1:-1])
+                    data = [x.split(',') for x in data]
+                    _ret = {}
+                    for each in data:
+                        yy, mm, dd = each[-2].split('-')
+                        date_ts = datetime(int(yy), int(mm), int(dd)).timestamp()
+                        _ret[date_ts] = float(each[2])
+                    ret[scode] = _ret
+                    done[0] += 1
+                    print('{} Done ({}/{})'.format(scode, done[0], len(scodes)))
+        except Exception as err:
+            print('{} fetching err: {}; link: {}'.format(scode, err, s_url))
+            await asyncio.sleep(timeout)
+            await fetch(session, s_url, scode, timeout=timeout+1)
+
+    async def loader(sem, session, scode):
+        s_url = url.format(scode[-6:])
+        async with sem:
+            await fetch(session, s_url, scode)
+
+    async def run():
+        tasks = []
+        sem = asyncio.Semaphore(limits)
+        async with aiohttp.ClientSession() as session:
+            for each in scodes:
+                task = asyncio.ensure_future(loader(sem, session, each))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
+
+    loop = asyncio.get_event_loop()
+    future = asyncio.ensure_future(run())
+    loop.run_until_complete(future)
+
+    return ret
+
+
+def download_all_shares_id(timeout=1):
+    url = 'http://quote.eastmoney.com/stock_list.html'
+    try:
+        resp = requests.get(url)
+        return re.findall(r'<li><a.*>(.*)\(((60|90|00|30)\d{4})\)</a></li>', resp.content.decode('gbk'))
+    except requests.exceptions.RequestException:
+        time.sleep(timeout)
+        download_all_shares_id(timeout+1)
+
+def update_finatial_reports():
+    all_shares = download_all_shares_id()
+    f_shares = download_finatial_reports([x[1] for x in all_shares])
+    data = {'update_ts': datetime.today().timestamp(), 'datas': f_shares}
+    with open('Stock_Finatial_Reports.json', 'w') as f:
+        f.write(json.dumps(data))
+
+def get_managers():
+    req = requests.get('http://fund.eastmoney.com/Data/FundDataPortfolio_Interface.aspx?dt=14&pn=5000')
+    m_str = re.search(r'data:(\[.*\]),', req.text).groups()[0]
+    managers = json.loads(m_str)
+    man_id = [x[0] for x in managers]
+    ret_man = {}
+
+    async def getm(session, url, mid):
+        async with session.get(url) as resp:
+            text = await resp.text()
+            ret_man[mid] = json.loads(text)
+            print(mid, 'Done')
+
+    async def apply(mid):
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for each in mid:
+                url = "http://fundmobapi.eastmoney.com/FundMApi/FundMangerBase.ashx?deviceid=fundmanager2016&version=4.3.0&product=EFund&plat=Iphone&MGRID={}".format(each)
+                tasks.append(asyncio.ensure_future(getm(session, url, each)))
+            await asyncio.gather(*tasks)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(apply(man_id))
+
+    # for each in man_id:
+    #     while True:
+    #         try:
+    #             url = "https://fundmobapi.eastmoney.com/FundMApi/FundMangerBase.ashx?deviceid=fundmanager2016&version=4.3.0&product=EFund&plat=Iphone&MGRID={}".format(each)
+    #             print('[{}] {}'.format(time.ctime(), url))
+    #             r = requests.get(url, 5)
+    #             ret_man.append(json.loads(r.text))
+    #             break
+    #         except requests.exceptions.RequestException:
+    #             pass
+    return ret_man
+
 if __name__ == '__main__':
     # with open('Stock_Finatial_Reports.json') as f:
     #     F_STOCKS_DB = json.loads(f.read())
@@ -625,6 +747,16 @@ if __name__ == '__main__':
     #         print('[{}] ({:.2%})'.format(each.name[:6], each.estimate(shares_db)), end=' | ')
     #     print()
     #     time.sleep(10)
+    #
+    # m = ManFilter()
+    # m.start()
 
-    m = ManFilter()
-    m.start()
+    choice = input('1. Update Stocks Finatial Reports.\n'
+                   '2. Update Managers Details.\n'
+                   '>> ')
+    if choice == '1':
+        update_finatial_reports()
+    elif choice == '2':
+        m = get_managers()
+        with open('Managers.json', 'w') as f:
+            f.write(json.dumps(m))
