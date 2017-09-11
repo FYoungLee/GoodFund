@@ -8,8 +8,6 @@ from datetime import datetime
 
 
 class GF_MainWindow(QWidget):
-    with open('Stock_Finatial_Reports.json') as f:
-        F_STOCKS_DB = json.loads(f.read())
     with open('Managers.json') as f:
         Managers = json.loads(f.read())
     FUNDS_DETAIL = gf_core4.scratch_all_funds()
@@ -21,6 +19,7 @@ class GF_MainWindow(QWidget):
         # 当前显示基金池
         self.Funds_Pool = {}
         self.Favorite_Funds = []
+        self.marketsDB = {}
 
         # 开始GUI布局
         mlayout = QVBoxLayout()
@@ -108,8 +107,10 @@ class GF_MainWindow(QWidget):
         self.setLayout(mlayout)
 
         self.the_markets_updater = gf_core4.Market_Updater()
-        self.fund_builder = gf_core4.FundsBuilder(self.FUNDS_DETAIL, self.F_STOCKS_DB)
+        self.the_markets_updater.markets_singal.connect(lambda x: self.marketsDB.update(x))
+        self.fund_builder = gf_core4.FundsBuilder(self.FUNDS_DETAIL)
         self.fund_builder.funds_obj_signals.connect(self.placeFunds)
+        self.fund_builder.stocks_appender.connect(self.the_markets_updater.extend_stocks)
         self.fund_builder.progress_signals.connect(lambda x: self.info_display.setText(x))
         self.fund_builder.start()
         self.the_markets_timer = self.startTimer(10000)
@@ -119,9 +120,29 @@ class GF_MainWindow(QWidget):
         # self.updater.market_sender.connect(lambda x: self.marketsDisplay.setText(x))
         # self.updater.start()
 
+    def cook_the_markets(self):
+        markets_str = ''
+        if self.marketsDB:
+            for each in ['s_sh000001', 's_sz399001', 's_sz399300', 's_sz399905', 's_sz399401', 's_sz399006']:
+                try:
+                    this = self.marketsDB[each]
+                except KeyError:
+                    continue
+                color = 'black'
+                sig = ''
+                if this['change'] > 0:
+                    color = 'red'
+                    sig = '+'
+                elif this['change'] < 0:
+                    color = 'green'
+                markets_str += '{}:&nbsp;<font color="{}">{}{}{}{}%</font>{}'\
+                    .format(this['name'], color, this['price'], '&nbsp;'*2, sig, this['change'], '&nbsp;'*6)
+        return markets_str
+
     def timerEvent(self, QTimerEvent):
         if QTimerEvent.timerId() == self.the_markets_timer:
-            text = self.the_markets_updater.cook_the_markets()
+            self.marketsDB = self.the_markets_updater.results
+            text = self.cook_the_markets()
             self.marketsDisplay.setText(text)
             if self.Funds_Pool:
                 self.updateFunds()
@@ -153,7 +174,6 @@ class GF_MainWindow(QWidget):
 
     def loadFavor(self):
         self.load_favor_btn.setEnabled(False)
-        self.killTimer(self.the_markets_timer)
         # 从json文档中加载已经保存的基金代码
         try:
             with open('Favorite_Funds.json', 'r') as f:
@@ -163,7 +183,6 @@ class GF_MainWindow(QWidget):
             return
         favors = [x for x in favors if x not in self.Funds_Pool.keys()]
         self.fund_builder.funds.extend(favors)
-        self.the_markets_timer = self.startTimer(10000)
 
     def displaySelectedFund(self, fund_item):
         # TODO display fund information locally
@@ -196,9 +215,8 @@ class GF_MainWindow(QWidget):
     #         self.syn_btn.setText('更新中...')
     #         self.updater.startUpdateTimer()
 
-    def placeFunds(self, funds_obj, stocks_in_funds):
+    def placeFunds(self, funds_obj):
         self.Funds_Pool.update(funds_obj)
-        self.the_markets_updater.extend_stocks(stocks_in_funds)
         self.display_table.setSortingEnabled(False)
         self.display_table.setRowCount(len(self.Funds_Pool))
         # starting_row = self.display_table.rowCount()
@@ -250,7 +268,10 @@ class GF_MainWindow(QWidget):
             cur_val = MyTableItem('{} [{}]'.format(fund.details['DWJZ'], fund.details['LJJZ']))
             self.display_table.setItem(row, 3, cur_val)
 
-            es = round(fund.estimate(self.the_markets_updater.current_market), 2)
+            es, missing = fund.estimate(self.marketsDB)
+            if missing:
+                self.the_markets_updater.extend_stocks(missing)
+                print('Missing stocks:', missing)
             est_chg = MyTableItem('{}%'.format(es))
             est_chg.setForeground(self.setValueColor(es))
             est_chg.setTextAlignment(Qt.AlignCenter)
@@ -277,7 +298,7 @@ class GF_MainWindow(QWidget):
             fund_scale.setTextAlignment(Qt.AlignCenter)
             self.display_table.setItem(row, 14, fund_scale)
 
-            avg, tips = fund.pe(self.the_markets_updater.current_market)
+            avg, tips = fund.pe(self.marketsDB)
             fund_pe = MyTableItem(str(avg))
             fund_pe.setTextAlignment(Qt.AlignCenter)
             fund_pe.setToolTip(tips)
@@ -309,13 +330,16 @@ class GF_MainWindow(QWidget):
                 continue
             fund = self.Funds_Pool[fund_id]
 
-            es = round(fund.estimate(self.the_markets_updater.current_market), 2)
+            es, missing = fund.estimate(self.marketsDB)
+            if missing:
+                self.the_markets_updater.extend_stocks(missing)
+                print('({}) Missing stocks:'.format(fund_id), missing)
             est_chg = MyTableItem('{}%'.format(es))
             est_chg.setForeground(self.setValueColor(es))
             est_chg.setTextAlignment(Qt.AlignCenter)
             self.display_table.setItem(row, 4, est_chg)
 
-            avg, tips = fund.pe(self.the_markets_updater.current_market)
+            avg, tips = fund.pe(self.marketsDB)
             fund_pe = MyTableItem(str(avg))
             fund_pe.setTextAlignment(Qt.AlignCenter)
             fund_pe.setToolTip(tips)
@@ -427,7 +451,7 @@ class GF_MainWindow(QWidget):
         self.display_table.clear()
         self.Funds_Pool.clear()
         self.the_markets_updater.stocks_id.clear()
-        self.the_markets_updater.current_market.clear()
+        self.marketsDB.clear()
         self.display_table.setRowCount(0)
         self.display_table.setColumnCount(0)
 
